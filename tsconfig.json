@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/protocol"
+    },
+    {
+      "path": "packages/shared-types"
+    },
+    {
+      "path": "apps/relay-server"
+    },
+    {
+      "path": "packages/mcp-server"
+    }
+  ]
+}

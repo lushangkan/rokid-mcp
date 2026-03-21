@@ -1,5 +1,7 @@
 Use Bun as the package manager.
 
+When installing dependencies with Bun, use `bun install --no-cache`.
+
 At the start of each task, review the project documentation to understand the project structure and dependencies.
 
 Whenever you begin implementing a new feature, create a new branch named `feature/feature-name` using English only.

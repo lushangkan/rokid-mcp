@@ -1,0 +1,17 @@
+{
+  "name": "@rokid-mcp/relay-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/main.ts",
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "start": "bun src/main.ts"
+  },
+  "dependencies": {
+    "@rokid-mcp/protocol": "workspace:*",
+    "@rokid-mcp/shared-types": "workspace:*",
+    "elysia": "^1.1.24"
+  }
+}

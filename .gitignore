@@ -1,2 +1,10 @@
 docs/
 apps/*/.idea/
+
+# Bun / Node.js
+node_modules/
+bun.lockb
+
+# TypeScript build outputs
+dist/
+*.tsbuildinfo
