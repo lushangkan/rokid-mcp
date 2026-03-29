@@ -1,5 +1,6 @@
 docs/
 apps/*/.idea/
+.worktrees/
 
 # Bun / Node.js
 node_modules/
