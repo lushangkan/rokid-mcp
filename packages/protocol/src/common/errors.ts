@@ -10,8 +10,12 @@ export const ErrorResponseSchema = Type.Object({
     message: Type.String(),
     retryable: Type.Boolean(),
     details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  }, {
+    additionalProperties: false,
   }),
   timestamp: TimestampSchema,
+}, {
+  additionalProperties: false,
 });
 
 export type ErrorResponse = Static<typeof ErrorResponseSchema>;
