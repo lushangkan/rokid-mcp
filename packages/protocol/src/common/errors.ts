@@ -9,7 +9,7 @@ export const ErrorResponseSchema = Type.Object({
     code: Type.String(),
     message: Type.String(),
     retryable: Type.Boolean(),
-    details: Type.Optional(Type.Unknown()),
+    details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   }),
   timestamp: TimestampSchema,
 });
