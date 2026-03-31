@@ -8,6 +8,9 @@
   ],
   "scripts": {
     "build": "tsc -b",
+    "build:android": "apps/android/gradlew -p apps/android :phone-app:assembleDebug :glasses-app:assembleDebug",
+    "build:android:glasses": "apps/android/gradlew -p apps/android :glasses-app:assembleDebug",
+    "build:android:phone": "apps/android/gradlew -p apps/android :phone-app:assembleDebug",
     "typecheck": "tsc -b --pretty false",
     "dev:relay": "bun run --cwd apps/relay-server dev"
   },
