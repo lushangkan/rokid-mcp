@@ -30,10 +30,11 @@ class PhoneAppControllerTest {
     fun `start without required config records startup error and does not run`() = runTest {
         val runtimeStore = PhoneRuntimeStore()
         val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val controllerLogStore = PhoneLogStore(logStore)
         Timber.plant(PhoneUiLogTree(logStore))
         val controller = PhoneAppController(
             runtimeStore = runtimeStore,
-            logStore = logStore,
+            logStore = controllerLogStore,
             loadConfig = {
                 PhoneGatewayConfig(
                     deviceId = "abc12345",
