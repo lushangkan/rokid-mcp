@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import timber.log.Timber
 
@@ -53,5 +54,36 @@ class PhoneAppControllerTest {
         assertEquals(1_717_171_800L, logStore.entries.value.single().timestampMs)
         assertEquals(PhoneLogLevel.ERROR, logStore.entries.value.single().level)
         assertEquals("controller", logStore.entries.value.single().tag)
+    }
+
+    @Test
+    fun `start uses preloaded config when provided`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                fail("loadConfig should not be called when preloaded config is provided")
+                PhoneGatewayConfig(
+                    deviceId = "phone-ab12cd34",
+                    authToken = null,
+                    relayBaseUrl = null,
+                    appVersion = "1.0",
+                )
+            },
+        )
+
+        controller.start(
+            targetDeviceAddress = "00:11:22:33:44:55",
+            preloadedConfig = PhoneGatewayConfig(
+                deviceId = "phone-ab12cd34",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+        )
+
+        assertEquals(GatewayRunState.STARTING, controller.runState.value)
     }
 }
