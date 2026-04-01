@@ -3,6 +3,7 @@ import { Value } from "@sinclair/typebox/value";
 import {
   RelayHelloMessageSchema,
   RelayHeartbeatMessageSchema,
+  RelayPhoneStateUpdateMessageSchema,
   RelayHelloAckMessageSchema,
   RelayDeviceInboundMessageSchema,
 } from "./ws.js";
@@ -46,6 +47,27 @@ describe("relay ws schema", () => {
     };
 
     expect(Value.Check(RelayHeartbeatMessageSchema, message)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, message)).toBe(true);
+  });
+
+  test("accepts phone_state_update message", () => {
+    const message = {
+      version: "1.0",
+      type: "phone_state_update",
+      deviceId: "rokid_glasses_01",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000002000,
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        activeCommandRequestId: null,
+      },
+    };
+
+    expect(Value.Check(RelayPhoneStateUpdateMessageSchema, message)).toBe(true);
     expect(Value.Check(RelayDeviceInboundMessageSchema, message)).toBe(true);
   });
 
