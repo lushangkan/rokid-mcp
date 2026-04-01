@@ -1,5 +1,6 @@
 package cn.cutemc.rokidmcp.glasses.logging
 
+import cn.cutemc.rokidmcp.glasses.BuildConfig
 import timber.log.Timber
 
 object GlassesLoggerBootstrap {
@@ -11,7 +12,9 @@ object GlassesLoggerBootstrap {
             return
         }
 
-        Timber.plant(Timber.DebugTree())
+        if (BuildConfig.DEBUG) {
+            Timber.plant(Timber.DebugTree())
+        }
         Timber.plant(GlassesUiLogTree(logStore))
         isInitialized = true
     }

@@ -2,6 +2,7 @@ package cn.cutemc.rokidmcp.phone.logging
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 
 class PhoneUiLogStore(
     private val capacity: Int = 200,
@@ -16,13 +17,15 @@ class PhoneUiLogStore(
         message: String,
         throwableSummary: String? = null,
     ) {
-        _entries.value = (_entries.value + PhoneLogEntry(
-            level = level,
-            tag = tag,
-            message = message,
-            timestampMs = nowMs(),
-            throwableSummary = throwableSummary,
-        )).takeLast(capacity)
+        _entries.update { current ->
+            (current + PhoneLogEntry(
+                level = level,
+                tag = tag,
+                message = message,
+                timestampMs = nowMs(),
+                throwableSummary = throwableSummary,
+            )).takeLast(capacity)
+        }
     }
 
     fun clear() {
