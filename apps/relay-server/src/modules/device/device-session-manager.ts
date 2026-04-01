@@ -78,7 +78,7 @@ export class DeviceSessionManager {
   }
 
   registerHello(input: RegisterHelloInput): string {
-    const sessionId = crypto.randomUUID();
+    const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "_")}`;
     const record: CurrentSessionRecord = {
       deviceId: input.deviceId,
       sessionId,
@@ -109,9 +109,13 @@ export class DeviceSessionManager {
     return sessionId;
   }
 
-  confirmHello(deviceId: string, sessionId: string): boolean {
+  confirmHello(deviceId: string, sessionId: string, socketId?: string): boolean {
     const current = this.sessions.get(deviceId);
     if (!current || current.sessionId !== sessionId) {
+      return false;
+    }
+
+    if (socketId && current.socketId !== socketId) {
       return false;
     }
 
@@ -170,6 +174,8 @@ export class DeviceSessionManager {
     }
 
     current.setupState = input.payload.setupState;
+    current.runtimeState = input.payload.runtimeState;
+    current.uplinkState = input.payload.uplinkState;
     current.lastSeenAt = input.timestamp;
     current.connected = true;
     current.sessionState = "ONLINE";
@@ -198,6 +204,11 @@ export class DeviceSessionManager {
 
     current.connected = false;
     current.sessionState = "CLOSED";
+    current.runtimeState = "DISCONNECTED";
+    current.uplinkState = "OFFLINE";
+    current.activeCommandRequestId = null;
+    current.lastErrorCode = null;
+    current.lastErrorMessage = null;
     this.sessions.set(current);
     this.runtimes.delete(deviceId);
     return true;
@@ -230,6 +241,7 @@ export class DeviceSessionManager {
 
     const runtime = this.runtimes.get(deviceId);
     const stale = this.isStale(current, now);
+    const closed = current.sessionState === "CLOSED" || current.connected === false;
 
     if (stale && current.sessionState === "ONLINE") {
       current.sessionState = "STALE";
@@ -244,12 +256,12 @@ export class DeviceSessionManager {
         connected: stale ? false : current.connected,
         sessionState: current.sessionState,
         setupState: current.setupState,
-        runtimeState: stale ? "DISCONNECTED" : runtime?.runtimeState ?? current.runtimeState,
-        uplinkState: stale ? "OFFLINE" : runtime?.uplinkState ?? current.uplinkState,
+        runtimeState: stale || closed ? "DISCONNECTED" : runtime?.runtimeState ?? current.runtimeState,
+        uplinkState: stale || closed ? "OFFLINE" : runtime?.uplinkState ?? current.uplinkState,
         capabilities: [...current.capabilities],
-        activeCommandRequestId: stale ? null : runtime?.activeCommandRequestId ?? current.activeCommandRequestId,
-        lastErrorCode: stale ? null : runtime?.lastErrorCode ?? current.lastErrorCode,
-        lastErrorMessage: stale ? null : runtime?.lastErrorMessage ?? current.lastErrorMessage,
+        activeCommandRequestId: stale || closed ? null : runtime?.activeCommandRequestId ?? current.activeCommandRequestId,
+        lastErrorCode: stale || closed ? null : runtime?.lastErrorCode ?? current.lastErrorCode,
+        lastErrorMessage: stale || closed ? null : runtime?.lastErrorMessage ?? current.lastErrorMessage,
         lastSeenAt: current.lastSeenAt,
         sessionId: current.sessionId,
       },
