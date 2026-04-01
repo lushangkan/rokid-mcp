@@ -60,6 +60,30 @@ export const RelayHeartbeatMessageSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const RelayPhoneStateUpdatePayloadSchema = Type.Object(
+  {
+    setupState: SetupStateSchema,
+    runtimeState: RuntimeStateSchema,
+    uplinkState: UplinkStateSchema,
+    lastErrorCode: Type.Optional(NullableStringSchema),
+    lastErrorMessage: Type.Optional(NullableStringSchema),
+    activeCommandRequestId: Type.Null(),
+  },
+  { additionalProperties: false },
+);
+
+export const RelayPhoneStateUpdateMessageSchema = Type.Object(
+  {
+    version: Type.Literal(PROTOCOL_VERSION),
+    type: Type.Literal("phone_state_update"),
+    deviceId: DeviceIdSchema,
+    sessionId: SessionIdSchema,
+    timestamp: TimestampSchema,
+    payload: RelayPhoneStateUpdatePayloadSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const RelayHelloAckPayloadSchema = Type.Object(
   {
     sessionId: SessionIdSchema,
@@ -92,12 +116,15 @@ export const RelayHelloAckMessageSchema = Type.Object(
 export const RelayDeviceInboundMessageSchema = Type.Union([
   RelayHelloMessageSchema,
   RelayHeartbeatMessageSchema,
+  RelayPhoneStateUpdateMessageSchema,
 ]);
 
 export type RelayHelloPayload = Static<typeof RelayHelloPayloadSchema>;
 export type RelayHelloMessage = Static<typeof RelayHelloMessageSchema>;
 export type RelayHeartbeatPayload = Static<typeof RelayHeartbeatPayloadSchema>;
 export type RelayHeartbeatMessage = Static<typeof RelayHeartbeatMessageSchema>;
+export type RelayPhoneStateUpdatePayload = Static<typeof RelayPhoneStateUpdatePayloadSchema>;
+export type RelayPhoneStateUpdateMessage = Static<typeof RelayPhoneStateUpdateMessageSchema>;
 export type RelayHelloAckPayload = Static<typeof RelayHelloAckPayloadSchema>;
 export type RelayHelloAckMessage = Static<typeof RelayHelloAckMessageSchema>;
 export type RelayDeviceInboundMessage = Static<typeof RelayDeviceInboundMessageSchema>;
