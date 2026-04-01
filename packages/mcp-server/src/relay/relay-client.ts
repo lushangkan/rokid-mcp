@@ -1,0 +1,73 @@
+import type { GetDeviceStatusParams, GetDeviceStatusResponse } from "../../../protocol/src/index.js";
+import { RelayRequestError } from "../lib/errors.js";
+import { validateRelayGetDeviceStatusResponse } from "./relay-response-validator.js";
+
+export type RelayClientConfig = {
+  relayBaseUrl: string;
+  requestTimeoutMs: number;
+};
+
+export type RelayClient = {
+  getDeviceStatus(params: GetDeviceStatusParams): Promise<GetDeviceStatusResponse>;
+};
+
+export function createRelayClient(config: RelayClientConfig): RelayClient {
+  return {
+    async getDeviceStatus(params) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, config.requestTimeoutMs);
+
+      let response: Response;
+      try {
+        response = await fetch(`${config.relayBaseUrl}/v1/device/status`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(params),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        throw new RelayRequestError(
+          "MCP_RELAY_REQUEST_FAILED",
+          "Failed to request relay get device status",
+          true,
+          {
+            cause: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+
+      clearTimeout(timer);
+
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        throw new RelayRequestError(
+          "MCP_RELAY_REQUEST_FAILED",
+          "Failed to parse relay response JSON",
+          false,
+          {
+            cause: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+
+      const validation = validateRelayGetDeviceStatusResponse(payload);
+      if (!validation.ok) {
+        throw new RelayRequestError(
+          validation.error.code,
+          validation.error.message,
+          validation.error.retryable,
+          validation.error.details,
+        );
+      }
+
+      return validation.value;
+    },
+  };
+}
