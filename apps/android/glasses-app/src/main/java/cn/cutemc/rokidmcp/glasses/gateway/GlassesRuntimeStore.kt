@@ -12,6 +12,7 @@ enum class GlassesRuntimeState {
 
 data class GlassesRuntimeSnapshot(
     val runtimeState: GlassesRuntimeState = GlassesRuntimeState.DISCONNECTED,
+    val lastErrorMessage: String? = null,
     val lastUpdatedAt: Long = 0L,
 )
 
