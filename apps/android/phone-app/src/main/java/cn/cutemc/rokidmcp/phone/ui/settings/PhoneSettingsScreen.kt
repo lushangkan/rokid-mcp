@@ -102,7 +102,7 @@ fun PhoneSettingsScreen(
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onStart) { Text("Start") }
+                    Button(onClick = onStart, enabled = state.canStart) { Text("Start") }
                     Button(onClick = onStop) { Text("Stop") }
                 }
             }
