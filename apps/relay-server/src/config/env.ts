@@ -1,22 +1,15 @@
-import { Type } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
-
-const EnvSchema = Type.Object({
-  PORT: Type.Optional(Type.String({ pattern: "^[0-9]+$" }))
-});
-
-export type Env = {
-  PORT: number;
+export type RelayEnv = {
+  port: number;
+  host: string;
+  heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
 };
 
-export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
-  const input = { PORT: source.PORT };
-
-  if (!Value.Check(EnvSchema, input)) {
-    throw new Error("Invalid environment variables");
-  }
-
+export function readRelayEnv(env: NodeJS.ProcessEnv = process.env): RelayEnv {
   return {
-    PORT: Number(input.PORT ?? "3000")
+    port: Number(env.PORT ?? 3000),
+    host: env.HOST ?? "0.0.0.0",
+    heartbeatIntervalMs: Number(env.RELAY_HEARTBEAT_INTERVAL_MS ?? 5000),
+    heartbeatTimeoutMs: Number(env.RELAY_HEARTBEAT_TIMEOUT_MS ?? 15000)
   };
 }
