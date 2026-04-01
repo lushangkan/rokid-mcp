@@ -136,6 +136,28 @@ describe("DeviceSessionManager", () => {
     }
   });
 
+  test("stale state is not mutated on read when cleanup interval is not running", async () => {
+    const manager = createManager();
+
+    manager.registerHello({
+      deviceId: "device-no-cleanup",
+      socketId: "socket-no-cleanup",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["display_text"],
+      },
+    });
+
+    await Bun.sleep(80);
+
+    const status = manager.getCurrentDeviceStatus("device-no-cleanup");
+
+    expect(status.device.sessionState).toBe("ONLINE");
+  });
+
   test("closed session reports disconnected runtime semantics", () => {
     const manager = createManager();
 
@@ -194,5 +216,40 @@ describe("DeviceSessionManager", () => {
     const status = manager.getCurrentDeviceStatus("device-fallback");
     expect(status.device.runtimeState).toBe("BUSY");
     expect(status.device.uplinkState).toBe("ERROR");
+  });
+
+  test("heartbeat keeps session fallback runtime fields consistent", () => {
+    const manager = createManager();
+
+    const sessionId = manager.registerHello({
+      deviceId: "device-heartbeat-fallback",
+      socketId: "socket-heartbeat-fallback",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["display_text"],
+      },
+    });
+
+    manager.markHeartbeat({
+      deviceId: "device-heartbeat-fallback",
+      sessionId,
+      socketId: "socket-heartbeat-fallback",
+      timestamp: Date.now(),
+      payload: {
+        runtimeState: "BUSY",
+        uplinkState: "ERROR",
+        activeCommandRequestId: "cmd_123",
+      },
+    });
+
+    (manager as unknown as { runtimes: { delete: (deviceId: string) => void } }).runtimes.delete("device-heartbeat-fallback");
+
+    const status = manager.getCurrentDeviceStatus("device-heartbeat-fallback");
+    expect(status.device.runtimeState).toBe("BUSY");
+    expect(status.device.uplinkState).toBe("ERROR");
+    expect(status.device.activeCommandRequestId).toBe("cmd_123");
   });
 });
