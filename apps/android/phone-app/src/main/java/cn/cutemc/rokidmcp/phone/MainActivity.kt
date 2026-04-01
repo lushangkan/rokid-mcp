@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
                     PhoneSettingsViewModel(
                         controller = phoneApp.appController,
                         localConfigStore = phoneApp.localConfigStore,
+                        appVersion = BuildConfig.VERSION_NAME,
                     )
                 }
                 DisposableEffect(Unit) {

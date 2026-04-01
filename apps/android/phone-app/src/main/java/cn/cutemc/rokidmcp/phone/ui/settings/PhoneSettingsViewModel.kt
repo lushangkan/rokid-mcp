@@ -4,6 +4,7 @@ import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
 import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfigStore
 import cn.cutemc.rokidmcp.phone.gateway.GatewayRunState
 import cn.cutemc.rokidmcp.phone.gateway.PhoneAppController
+import cn.cutemc.rokidmcp.phone.gateway.PhoneGatewayConfig
 import cn.cutemc.rokidmcp.phone.gateway.PhoneRuntimeSnapshot
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +34,7 @@ class PhoneSettingsViewModel(
     private val localConfigStore: PhoneLocalConfigStore,
     scope: CoroutineScope? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val appVersion: String = "1.0",
 ) {
     private val ownedScope = scope == null
     private val coroutineScope = scope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -133,10 +135,15 @@ class PhoneSettingsViewModel(
             return
         }
         coroutineScope.launch {
+            val currentState = _uiState.value
+            val startConfig = toGatewayConfig(currentState)
             withContext(ioDispatcher) {
-                persistCurrentConfig(_uiState.value)
+                persistCurrentConfig(currentState)
             }
-            controller.start(targetDeviceAddress = _uiState.value.targetDeviceAddress)
+            controller.start(
+                targetDeviceAddress = currentState.targetDeviceAddress,
+                preloadedConfig = startConfig,
+            )
         }
     }
 
@@ -187,6 +194,15 @@ class PhoneSettingsViewModel(
                 authToken = state.authToken.ifBlank { null },
                 relayBaseUrl = state.relayBaseUrl.ifBlank { null },
             ),
+        )
+    }
+
+    private fun toGatewayConfig(state: PhoneSettingsUiState): PhoneGatewayConfig {
+        return PhoneGatewayConfig(
+            deviceId = state.deviceId,
+            authToken = state.authToken.ifBlank { null },
+            relayBaseUrl = state.relayBaseUrl.ifBlank { null },
+            appVersion = appVersion,
         )
     }
 }

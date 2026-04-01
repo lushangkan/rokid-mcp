@@ -31,8 +31,8 @@ class PhoneAppController(
     val snapshot: StateFlow<PhoneRuntimeSnapshot> = runtimeStore.snapshot
     val logs: StateFlow<List<PhoneLogEntry>> = logStore.entries
 
-    suspend fun start(targetDeviceAddress: String) {
-        val config = loadConfig()
+    suspend fun start(targetDeviceAddress: String, preloadedConfig: PhoneGatewayConfig? = null) {
+        val config = preloadedConfig ?: loadConfig()
         runtimeStore.replace(
             PhoneRuntimeSnapshot(
                 setupState = PhoneSetupState.INITIALIZED,
