@@ -1,9 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 
 import { readMcpEnv, type McpEnv } from "./config/env.js";
 import { createRelayClient, type RelayClient } from "./relay/relay-client.js";
-import { createGetDeviceStatusTool, GET_DEVICE_STATUS_TOOL_NAME } from "./tools/get-device-status.js";
+import {
+  createGetDeviceStatusTool,
+  GET_DEVICE_STATUS_TOOL_NAME,
+  getDeviceStatusMcpInputSchema,
+} from "./tools/get-device-status.js";
 
 export type McpServerDependencies = {
   env?: McpEnv;
@@ -24,9 +27,7 @@ export function createMcpServer(deps: McpServerDependencies = {}): McpServer {
     GET_DEVICE_STATUS_TOOL_NAME,
     {
       description: getDeviceStatusTool.description,
-      inputSchema: {
-        deviceId: z.string(),
-      },
+      inputSchema: getDeviceStatusMcpInputSchema,
     },
     async ({ deviceId }) => getDeviceStatusTool.handler({ deviceId }),
   );

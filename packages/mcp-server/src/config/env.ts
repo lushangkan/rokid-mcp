@@ -12,10 +12,14 @@ function readRequiredString(env: NodeJS.ProcessEnv, name: string): string {
   return value;
 }
 
-function readFiniteNumber(value: string | undefined, fallback: number, name: string): number {
+function readPositiveInteger(value: string | undefined, fallback: number, name: string): number {
   const parsed = Number(value ?? fallback);
   if (!Number.isFinite(parsed)) {
     throw new Error(`Invalid numeric environment variable: ${name}`);
+  }
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Environment variable ${name} must be a positive integer`);
   }
 
   return parsed;
@@ -33,6 +37,6 @@ function normalizeBaseUrl(value: string): string {
 export function readMcpEnv(env: NodeJS.ProcessEnv = process.env): McpEnv {
   return {
     relayBaseUrl: normalizeBaseUrl(readRequiredString(env, "RELAY_BASE_URL")),
-    requestTimeoutMs: readFiniteNumber(env.RELAY_REQUEST_TIMEOUT_MS, 5000, "RELAY_REQUEST_TIMEOUT_MS"),
+    requestTimeoutMs: readPositiveInteger(env.RELAY_REQUEST_TIMEOUT_MS, 5000, "RELAY_REQUEST_TIMEOUT_MS"),
   };
 }

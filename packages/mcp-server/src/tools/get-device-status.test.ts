@@ -64,4 +64,19 @@ describe("createGetDeviceStatusTool", () => {
     expect(result.isError).toBe(true);
     expect(result.error?.code).toBe("MCP_RELAY_REQUEST_FAILED");
   });
+
+  test("maps unexpected thrown errors to MCP_RELAY_REQUEST_FAILED", async () => {
+    const tool = createGetDeviceStatusTool({
+      relayClient: {
+        async getDeviceStatus() {
+          throw new Error("unexpected boom");
+        },
+      },
+    });
+
+    const result = await tool.handler({ deviceId: "rokid_glasses_01" });
+    expect(result.isError).toBe(true);
+    expect(result.error?.code).toBe("MCP_RELAY_REQUEST_FAILED");
+    expect(result.error?.retryable).toBe(true);
+  });
 });
