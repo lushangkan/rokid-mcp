@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
     "build:android": "apps/android/gradlew -p apps/android :phone-app:assembleDebug :glasses-app:assembleDebug",
     "build:android:glasses": "apps/android/gradlew -p apps/android :glasses-app:assembleDebug",
     "build:android:phone": "apps/android/gradlew -p apps/android :phone-app:assembleDebug",
