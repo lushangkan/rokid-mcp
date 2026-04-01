@@ -15,8 +15,8 @@ import {
 
 export const RelayHelloPayloadSchema = Type.Object(
   {
-    authToken: Type.String(),
-    appVersion: Type.String(),
+    authToken: Type.String({ minLength: 1 }),
+    appVersion: Type.String({ minLength: 1 }),
     phoneInfo: Type.Object({}, { additionalProperties: true }),
     setupState: SetupStateSchema,
     runtimeState: RuntimeStateSchema,
@@ -39,10 +39,10 @@ export const RelayHelloMessageSchema = Type.Object(
 
 export const RelayHeartbeatPayloadSchema = Type.Object(
   {
-    seq: Type.Number({ minimum: 0 }),
+    seq: Type.Integer({ minimum: 0 }),
     runtimeState: RuntimeStateSchema,
     uplinkState: UplinkStateSchema,
-    pendingCommandCount: Type.Number({ minimum: 0 }),
+    pendingCommandCount: Type.Integer({ minimum: 0 }),
     activeCommandRequestId: NullableStringSchema,
   },
   { additionalProperties: false },
@@ -88,12 +88,13 @@ export const RelayHelloAckPayloadSchema = Type.Object(
   {
     sessionId: SessionIdSchema,
     serverTime: TimestampSchema,
-    heartbeatIntervalMs: Type.Number({ minimum: 1 }),
-    heartbeatTimeoutMs: Type.Number({ minimum: 1 }),
+    heartbeatIntervalMs: Type.Integer({ minimum: 1 }),
+    heartbeatTimeoutMs: Type.Integer({ minimum: 1 }),
+    sessionTtlMs: Type.Integer({ minimum: 1 }),
     limits: Type.Object(
       {
-        maxPendingCommands: Type.Number({ minimum: 1 }),
-        maxImageUploadSizeBytes: Type.Number({ minimum: 1 }),
+        maxPendingCommands: Type.Integer({ minimum: 1 }),
+        maxImageUploadSizeBytes: Type.Integer({ minimum: 1 }),
         acceptedImageContentTypes: Type.Array(Type.String(), { minItems: 1 }),
       },
       { additionalProperties: false },
