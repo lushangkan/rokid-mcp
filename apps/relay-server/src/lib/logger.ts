@@ -1,29 +1,13 @@
-import { nowIsoString } from "./clock.js";
-
-type Level = "INFO" | "ERROR";
-
-function log(level: Level, message: string, context?: unknown): void {
-  const payload = {
-    ts: nowIsoString(),
-    level,
-    msg: message,
-    ...(context === undefined ? {} : { context })
-  };
-
-  const line = JSON.stringify(payload);
-  if (level === "ERROR") {
-    console.error(line);
-    return;
-  }
-
-  console.log(line);
+export interface Logger {
+  info: (message: string, payload?: unknown) => void;
+  error: (message: string, payload?: unknown) => void;
 }
 
-export const logger = {
-  info(message: string, context?: unknown): void {
-    log("INFO", message, context);
+export const consoleLogger: Logger = {
+  info: (message: string, payload?: unknown) => {
+    console.info(message, payload);
   },
-  error(message: string, context?: unknown): void {
-    log("ERROR", message, context);
+  error: (message: string, payload?: unknown) => {
+    console.error(message, payload);
   }
 };

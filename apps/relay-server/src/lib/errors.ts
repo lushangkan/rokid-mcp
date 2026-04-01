@@ -1,17 +1,10 @@
-export class AppError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status = 500) {
+export class RelayAppError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly retryable = false
+  ) {
     super(message);
-    this.name = "AppError";
-    this.status = status;
+    this.name = "RelayAppError";
   }
-}
-
-export function toErrorResponse(error: unknown): Response {
-  if (error instanceof AppError) {
-    return Response.json({ ok: false, error: error.message }, { status: error.status });
-  }
-
-  return Response.json({ ok: false, error: "Internal Server Error" }, { status: 500 });
 }
