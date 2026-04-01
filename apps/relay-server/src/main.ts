@@ -1,11 +1,11 @@
 import { createApp } from "./app.js";
-import { loadEnv } from "./config/env.js";
-import { logger } from "./lib/logger.js";
+import { readRelayEnv } from "./config/env.js";
 
-const { PORT } = loadEnv();
+const env = readRelayEnv();
 
-const app = createApp().listen(PORT);
-
-logger.info("relay-server listening", {
-  url: `http://localhost:${app.server?.port ?? PORT}`
+createApp().listen({
+  hostname: env.host,
+  port: env.port
+}, ({ hostname, port }) => {
+  console.log(`relay-server listening on http://${hostname}:${port}`);
 });
