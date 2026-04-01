@@ -12,6 +12,7 @@
   "dependencies": {
     "@rokid-mcp/protocol": "workspace:*",
     "@rokid-mcp/shared-types": "workspace:*",
+    "@sinclair/typebox": "^0.34.49",
     "elysia": "^1.1.24"
   }
 }
