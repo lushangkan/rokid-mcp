@@ -38,12 +38,14 @@ class PhoneUiLogTreeTest {
         val store = PhoneUiLogStore(nowMs = { 5678L })
         Timber.plant(PhoneUiLogTree(store))
 
-        Timber.tag("").e(IllegalStateException("boom"), "failed")
+        val failure = IllegalStateException("boom")
+
+        Timber.tag("").e(failure, "failed")
 
         val entry = store.entries.value.single()
         assertEquals(PhoneLogLevel.ERROR, entry.level)
         assertEquals("app", entry.tag)
-        assertEquals("failed", entry.message)
+        assertEquals("failed\n${failure.stackTraceToString()}", entry.message)
         assertEquals(5678L, entry.timestampMs)
         assertEquals("IllegalStateException: boom", entry.throwableSummary)
     }
