@@ -12,6 +12,7 @@ import cn.cutemc.rokidmcp.share.protocol.PingPayload
 import cn.cutemc.rokidmcp.share.protocol.PongPayload
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -38,9 +39,13 @@ class GlassesLocalLinkSession(
     }
 
     suspend fun stop(reason: String) {
-        eventJob?.cancel()
-        eventJob = null
-        transport.stop(reason)
+        try {
+            transport.stop(reason)
+        } finally {
+            controller.markDisconnected()
+            eventJob?.cancelAndJoin()
+            eventJob = null
+        }
     }
 
     private suspend fun handleFrame(event: GlassesTransportEvent.FrameReceived) {
