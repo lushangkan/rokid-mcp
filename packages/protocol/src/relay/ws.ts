@@ -90,7 +90,7 @@ export const RelayHelloAckPayloadSchema = Type.Object(
     serverTime: TimestampSchema,
     heartbeatIntervalMs: Type.Integer({ minimum: 1 }),
     heartbeatTimeoutMs: Type.Integer({ minimum: 1 }),
-    sessionTtlMs: Type.Integer({ minimum: 1 }),
+    sessionTtlMs: Type.Optional(Type.Integer({ minimum: 1 })),
     limits: Type.Object(
       {
         maxPendingCommands: Type.Integer({ minimum: 1 }),
