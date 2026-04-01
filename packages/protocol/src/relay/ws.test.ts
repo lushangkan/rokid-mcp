@@ -159,7 +159,6 @@ describe("relay ws schema", () => {
         serverTime: 1710000000000,
         heartbeatIntervalMs: 5000,
         heartbeatTimeoutMs: 15000,
-        sessionTtlMs: 30000,
         limits: {
           maxPendingCommands: 1,
           maxImageUploadSizeBytes: 10485760,
