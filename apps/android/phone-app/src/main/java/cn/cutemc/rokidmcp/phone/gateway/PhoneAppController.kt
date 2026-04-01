@@ -1,7 +1,6 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
-import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import timber.log.Timber
@@ -24,7 +23,7 @@ enum class GatewayRunState {
 
 class PhoneAppController(
     private val runtimeStore: PhoneRuntimeStore,
-    private val logStore: PhoneUiLogStore,
+    private val logStore: PhoneLogStore,
     private val loadConfig: () -> PhoneGatewayConfig,
 ) {
     private val _runState = MutableStateFlow(GatewayRunState.IDLE)
