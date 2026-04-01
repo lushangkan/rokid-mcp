@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "bun@1.2.5",
   "workspaces": [
+    "apps/android",
     "apps/relay-server",
     "packages/*"
   ],
