@@ -1,7 +1,10 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
+import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import timber.log.Timber
 
 data class PhoneGatewayConfig(
     val deviceId: String,
@@ -21,7 +24,7 @@ enum class GatewayRunState {
 
 class PhoneAppController(
     private val runtimeStore: PhoneRuntimeStore,
-    private val logStore: PhoneLogStore,
+    private val logStore: PhoneUiLogStore,
     private val loadConfig: () -> PhoneGatewayConfig,
 ) {
     private val _runState = MutableStateFlow(GatewayRunState.IDLE)
@@ -41,7 +44,7 @@ class PhoneAppController(
 
         if (config.authToken.isNullOrBlank() || config.relayBaseUrl.isNullOrBlank()) {
             _runState.value = GatewayRunState.ERROR
-            logStore.append("controller", "missing relay config")
+            Timber.tag("controller").e("missing relay config")
             runtimeStore.replace(
                 runtimeStore.snapshot.value.copy(
                     runtimeState = PhoneRuntimeState.ERROR,
@@ -53,12 +56,12 @@ class PhoneAppController(
         }
 
         _runState.value = GatewayRunState.STARTING
-        logStore.append("controller", "start requested for $targetDeviceAddress")
+        Timber.tag("controller").i("start requested for $targetDeviceAddress")
     }
 
     suspend fun stop(reason: String) {
         _runState.value = GatewayRunState.STOPPING
-        logStore.append("controller", "stop requested: $reason")
+        Timber.tag("controller").i("stop requested: $reason")
         _runState.value = GatewayRunState.STOPPED
     }
 

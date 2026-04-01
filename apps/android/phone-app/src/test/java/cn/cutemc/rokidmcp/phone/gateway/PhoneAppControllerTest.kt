@@ -1,11 +1,21 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import cn.cutemc.rokidmcp.phone.logging.PhoneLogLevel
+import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
+import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogTree
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import timber.log.Timber
 
 class PhoneAppControllerTest {
+    @After
+    fun tearDown() {
+        Timber.uprootAll()
+    }
+
     @Test
     fun `runtime store starts disconnected and offline`() = runTest {
         val store = PhoneRuntimeStore()
@@ -19,7 +29,8 @@ class PhoneAppControllerTest {
     @Test
     fun `start without required config records startup error and does not run`() = runTest {
         val runtimeStore = PhoneRuntimeStore()
-        val logStore = PhoneLogStore(clock = FakeClock(1_717_171_800L))
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        Timber.plant(PhoneUiLogTree(logStore))
         val controller = PhoneAppController(
             runtimeStore = runtimeStore,
             logStore = logStore,
@@ -39,5 +50,7 @@ class PhoneAppControllerTest {
         assertEquals("PHONE_CONFIG_INCOMPLETE", runtimeStore.snapshot.value.lastErrorCode)
         assertTrue(logStore.entries.value.any { it.message.contains("missing relay config") })
         assertEquals(1_717_171_800L, logStore.entries.value.single().timestampMs)
+        assertEquals(PhoneLogLevel.ERROR, logStore.entries.value.single().level)
+        assertEquals("controller", logStore.entries.value.single().tag)
     }
 }
