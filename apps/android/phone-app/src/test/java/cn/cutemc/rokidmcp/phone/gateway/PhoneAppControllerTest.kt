@@ -19,7 +19,7 @@ class PhoneAppControllerTest {
     @Test
     fun `start without required config records startup error and does not run`() = runTest {
         val runtimeStore = PhoneRuntimeStore()
-        val logStore = PhoneLogStore()
+        val logStore = PhoneLogStore(clock = FakeClock(1_717_171_800L))
         val controller = PhoneAppController(
             runtimeStore = runtimeStore,
             logStore = logStore,
@@ -38,5 +38,6 @@ class PhoneAppControllerTest {
         assertEquals(GatewayRunState.ERROR, controller.runState.value)
         assertEquals("PHONE_CONFIG_INCOMPLETE", runtimeStore.snapshot.value.lastErrorCode)
         assertTrue(logStore.entries.value.any { it.message.contains("missing relay config") })
+        assertEquals(1_717_171_800L, logStore.entries.value.single().timestampMs)
     }
 }
