@@ -5,9 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.cutemc.rokidmcp.phone.ui.PhoneMainScreen
 import cn.cutemc.rokidmcp.phone.ui.theme.RokidMCPPhoneTheme
 
@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             RokidMCPPhoneTheme {
-                val logs by phoneApp.logStore.entries.collectAsState()
+                val logs by phoneApp.logStore.entries.collectAsStateWithLifecycle()
                 PhoneMainScreen(
                     logs = logs,
                     onClearLogs = phoneApp.logStore::clear,
