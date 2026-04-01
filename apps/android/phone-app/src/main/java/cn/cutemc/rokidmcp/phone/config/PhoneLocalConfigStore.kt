@@ -6,32 +6,22 @@ import java.util.Properties
 class PhoneLocalConfigStore(
     private val filesDirProvider: () -> File,
 ) {
-    private val configFileName = "phone-local-config.json"
+    private val configFileName = "phone-local-config.properties"
+    private val legacyConfigFileName = "phone-local-config.json"
 
     fun load(): PhoneLocalConfig {
         val configFile = configFile()
         if (!configFile.exists()) {
+            val legacyFile = legacyConfigFile()
+            if (legacyFile.exists()) {
+                return loadFromFile(legacyFile, migrateToCurrent = true)
+            }
             val defaultConfig = PhoneLocalConfig.default()
             save(defaultConfig)
             return defaultConfig
         }
 
-        val properties = Properties().apply {
-            configFile.inputStream().use { load(it) }
-        }
-        val loaded = PhoneLocalConfig(
-            deviceId = properties.getProperty("deviceId") ?: "",
-            authToken = properties.getProperty("authToken")?.ifBlank { null },
-            relayBaseUrl = properties.getProperty("relayBaseUrl")?.ifBlank { null },
-        )
-
-        if (!PhoneLocalConfig.isValidDeviceId(loaded.deviceId)) {
-            val defaultConfig = PhoneLocalConfig.default()
-            save(defaultConfig)
-            return defaultConfig
-        }
-
-        return loaded
+        return loadFromFile(configFile)
     }
 
     fun save(config: PhoneLocalConfig) {
@@ -51,5 +41,35 @@ class PhoneLocalConfigStore(
 
     private fun configFile(): File {
         return File(filesDirProvider(), configFileName)
+    }
+
+    private fun legacyConfigFile(): File {
+        return File(filesDirProvider(), legacyConfigFileName)
+    }
+
+    private fun loadFromFile(sourceFile: File, migrateToCurrent: Boolean = false): PhoneLocalConfig {
+        val loaded = runCatching {
+            val properties = Properties().apply {
+                sourceFile.inputStream().use { load(it) }
+            }
+            PhoneLocalConfig(
+                deviceId = properties.getProperty("deviceId") ?: "",
+                authToken = properties.getProperty("authToken")?.ifBlank { null },
+                relayBaseUrl = properties.getProperty("relayBaseUrl")?.ifBlank { null },
+            )
+        }.getOrNull()
+
+        val isLoadedValid = loaded != null && PhoneLocalConfig.isValidDeviceId(loaded.deviceId)
+        val recovered = if (isLoadedValid) {
+            loaded
+        } else {
+            PhoneLocalConfig.default()
+        }
+
+        if (migrateToCurrent || !isLoadedValid) {
+            save(recovered)
+        }
+
+        return recovered
     }
 }

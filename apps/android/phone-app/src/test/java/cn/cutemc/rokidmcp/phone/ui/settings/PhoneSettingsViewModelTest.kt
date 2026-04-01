@@ -41,11 +41,15 @@ class PhoneSettingsViewModelTest {
             controller = controller,
             localConfigStore = configStore,
             scope = scope,
+            ioDispatcher = dispatcher,
         )
+
+        assertEquals("", viewModel.uiState.value.deviceId)
         scope.testScheduler.runCurrent()
 
         assertTrue(viewModel.uiState.value.deviceId.startsWith("phone-"))
         assertTrue(viewModel.uiState.value.canSave)
+        assertFalse(viewModel.uiState.value.canStart)
     }
 
     @Test
@@ -72,6 +76,7 @@ class PhoneSettingsViewModelTest {
             controller = controller,
             localConfigStore = configStore,
             scope = scope,
+            ioDispatcher = dispatcher,
         )
         scope.testScheduler.runCurrent()
 
@@ -106,6 +111,7 @@ class PhoneSettingsViewModelTest {
             controller = controller,
             localConfigStore = configStore,
             scope = scope,
+            ioDispatcher = dispatcher,
         )
         scope.testScheduler.runCurrent()
 
@@ -113,10 +119,46 @@ class PhoneSettingsViewModelTest {
         viewModel.onAuthTokenChanged("token-123")
         viewModel.onRelayBaseUrlChanged("https://relay.example.com")
         assertTrue(viewModel.save())
+        scope.testScheduler.runCurrent()
 
         val loaded = configStore.load()
         assertEquals("phone-ab12cd34", loaded.deviceId)
         assertEquals("token-123", loaded.authToken)
         assertEquals("https://relay.example.com", loaded.relayBaseUrl)
+    }
+
+    @Test
+    fun `start does nothing when required start fields are missing`() = runTest {
+        val tempDir = Files.createTempDirectory("phone-settings-vm-test").toFile()
+        val configStore = PhoneLocalConfigStore(filesDirProvider = { tempDir })
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+        scope.testScheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.canStart)
+        viewModel.startGateway()
+        scope.testScheduler.runCurrent()
+
+        assertEquals(cn.cutemc.rokidmcp.phone.gateway.GatewayRunState.IDLE, controller.runState.value)
     }
 }
