@@ -5,6 +5,9 @@
       "path": "packages/protocol"
     },
     {
+      "path": "packages/protocol/tsconfig.test.json"
+    },
+    {
       "path": "packages/shared-types"
     },
     {
