@@ -1,5 +1,6 @@
 package cn.cutemc.rokidmcp.phone.logging
 
+import cn.cutemc.rokidmcp.phone.BuildConfig
 import timber.log.Timber
 
 object PhoneLoggerBootstrap {
@@ -11,7 +12,9 @@ object PhoneLoggerBootstrap {
             return
         }
 
-        Timber.plant(Timber.DebugTree())
+        if (BuildConfig.DEBUG) {
+            Timber.plant(Timber.DebugTree())
+        }
         Timber.plant(PhoneUiLogTree(logStore))
         isInitialized = true
     }
