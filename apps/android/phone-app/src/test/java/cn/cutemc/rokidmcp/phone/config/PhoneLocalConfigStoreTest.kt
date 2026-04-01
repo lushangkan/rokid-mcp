@@ -8,6 +8,7 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.Properties
 
 class PhoneLocalConfigStoreTest {
     private lateinit var tempDir: File
@@ -62,5 +63,36 @@ class PhoneLocalConfigStoreTest {
         assertTrue(PhoneLocalConfig.isValidDeviceId("phone-ab12cd34"))
         assertTrue(PhoneLocalConfig.isValidDeviceId("abc12345"))
         assertTrue(PhoneLocalConfig.isValidDeviceId("node-01-abcdef"))
+    }
+
+    @Test
+    fun `load recovers with default when config content is corrupted`() {
+        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
+        val corruptedFile = File(tempDir, "phone-local-config.properties")
+        corruptedFile.writeText("deviceId=phone-ab12cd34\\u12")
+
+        val config = store.load()
+
+        assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
+        val reloaded = store.load()
+        assertEquals(config, reloaded)
+    }
+
+    @Test
+    fun `load supports legacy json filename with properties content`() {
+        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
+        val legacyFile = File(tempDir, "phone-local-config.json")
+        Properties().apply {
+            setProperty("deviceId", "phone-ab12cd34")
+            setProperty("authToken", "token-legacy")
+            setProperty("relayBaseUrl", "https://relay.legacy")
+            legacyFile.outputStream().use { store(it, null) }
+        }
+
+        val loaded = store.load()
+
+        assertEquals("phone-ab12cd34", loaded.deviceId)
+        assertEquals("token-legacy", loaded.authToken)
+        assertEquals("https://relay.legacy", loaded.relayBaseUrl)
     }
 }
