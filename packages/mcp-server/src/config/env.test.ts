@@ -25,6 +25,24 @@ describe("readMcpEnv", () => {
     ).toThrow("Invalid numeric environment variable: RELAY_REQUEST_TIMEOUT_MS");
   });
 
+  test("throws when timeout is not a positive integer", () => {
+    expect(() =>
+      readMcpEnv({
+        RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_REQUEST_TIMEOUT_MS: "0",
+      })
+    ).toThrow("Environment variable RELAY_REQUEST_TIMEOUT_MS must be a positive integer");
+  });
+
+  test("throws when timeout is a non-integer value", () => {
+    expect(() =>
+      readMcpEnv({
+        RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_REQUEST_TIMEOUT_MS: "1.5",
+      })
+    ).toThrow("Environment variable RELAY_REQUEST_TIMEOUT_MS must be a positive integer");
+  });
+
   test("throws when RELAY_BASE_URL is not a valid URL", () => {
     expect(() =>
       readMcpEnv({
