@@ -1,15 +1,11 @@
-import { Elysia } from "elysia";
-import { PROTOCOL_NAME, PROTOCOL_VERSION } from "@rokid-mcp/protocol";
+import { createApp } from "./app.js";
+import { loadEnv } from "./config/env.js";
+import { logger } from "./lib/logger.js";
 
-const port = Number(process.env.PORT ?? 3000);
+const { PORT } = loadEnv();
 
-const app = new Elysia()
-  .get("/health", () => ({
-    ok: true,
-    service: "relay-server",
-    protocol: PROTOCOL_NAME,
-    version: PROTOCOL_VERSION
-  }))
-  .listen(port);
+const app = createApp().listen(PORT);
 
-console.log(`relay-server listening on http://localhost:${app.server?.port ?? port}`);
+logger.info("relay-server listening", {
+  url: `http://localhost:${app.server?.port ?? PORT}`
+});
