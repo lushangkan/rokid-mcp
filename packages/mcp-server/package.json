@@ -16,7 +16,10 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5",
     "@rokid-mcp/protocol": "workspace:*",
-    "@rokid-mcp/shared-types": "workspace:*"
+    "@rokid-mcp/shared-types": "workspace:*",
+    "@sinclair/typebox": "^0.34.41",
+    "zod": "^4.1.12"
   }
 }
