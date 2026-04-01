@@ -94,4 +94,77 @@ class GlassesLocalLinkSessionTest {
 
         session.stop("test complete")
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `transport failure event moves runtime state to error`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_000L),
+            sessionScope = backgroundScope,
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(GlassesTransportEvent.Failure(IllegalStateException("rfcomm broken")))
+        runCurrent()
+
+        assertEquals(GlassesRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `transport connection closed event moves runtime state to disconnected`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_100L),
+            sessionScope = backgroundScope,
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(GlassesTransportEvent.Failure(IllegalStateException("temporary")))
+        runCurrent()
+        assertEquals(GlassesRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+
+        transport.emit(GlassesTransportEvent.ConnectionClosed("link closed"))
+        runCurrent()
+
+        assertEquals(GlassesRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `session stop ends with disconnected runtime state`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_200L),
+            sessionScope = backgroundScope,
+        )
+
+        session.start()
+        runCurrent()
+
+        session.stop("user requested")
+        runCurrent()
+
+        assertEquals(listOf("user requested"), transport.stopReasons)
+        assertEquals(GlassesRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+    }
 }
