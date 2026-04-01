@@ -155,6 +155,21 @@ export class DeviceSessionManager {
     }
 
     this.markInboundSeen(input.deviceId, input.sessionId, input.socketId, input.timestamp);
+    const current = this.sessions.get(input.deviceId);
+    if (!current) {
+      return false;
+    }
+
+    current.runtimeState = input.payload.runtimeState;
+    current.uplinkState = input.payload.uplinkState;
+    current.activeCommandRequestId = input.payload.activeCommandRequestId;
+    current.lastErrorCode = null;
+    current.lastErrorMessage = null;
+    current.lastSeenAt = input.timestamp;
+    current.connected = true;
+    current.sessionState = "ONLINE";
+    this.sessions.set(current);
+
     this.runtimes.set({
       deviceId: input.deviceId,
       runtimeState: input.payload.runtimeState,
@@ -240,14 +255,8 @@ export class DeviceSessionManager {
     }
 
     const runtime = this.runtimes.get(deviceId);
-    const stale = this.isStale(current, now);
+    const stale = current.sessionState === "STALE";
     const closed = current.sessionState === "CLOSED" || current.connected === false;
-
-    if (stale && current.sessionState === "ONLINE") {
-      current.sessionState = "STALE";
-      current.connected = false;
-      this.sessions.set(current);
-    }
 
     return {
       ok: true,
