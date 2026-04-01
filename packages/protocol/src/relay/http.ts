@@ -20,7 +20,7 @@ export const GetDeviceStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const DeviceStatusSnapshotSchema = Type.Object(
+export const GetDeviceStatusDeviceSchema = Type.Object(
   {
     deviceId: DeviceIdSchema,
     connected: Type.Boolean(),
@@ -41,12 +41,12 @@ export const DeviceStatusSnapshotSchema = Type.Object(
 export const GetDeviceStatusResponseSchema = Type.Object(
   {
     ok: Type.Literal(true),
-    device: DeviceStatusSnapshotSchema,
+    device: GetDeviceStatusDeviceSchema,
     timestamp: TimestampSchema,
   },
   { additionalProperties: false },
 );
 
 export type GetDeviceStatusParams = Static<typeof GetDeviceStatusParamsSchema>;
-export type DeviceStatusSnapshot = Static<typeof DeviceStatusSnapshotSchema>;
+export type GetDeviceStatusDevice = Static<typeof GetDeviceStatusDeviceSchema>;
 export type GetDeviceStatusResponse = Static<typeof GetDeviceStatusResponseSchema>;
