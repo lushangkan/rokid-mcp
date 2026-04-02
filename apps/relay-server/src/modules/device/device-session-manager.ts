@@ -78,6 +78,7 @@ export class DeviceSessionManager {
   }
 
   registerHello(input: RegisterHelloInput): string {
+    const seenAt = Date.now();
     const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "_")}`;
     const record: CurrentSessionRecord = {
       deviceId: input.deviceId,
@@ -92,7 +93,7 @@ export class DeviceSessionManager {
       activeCommandRequestId: null,
       lastErrorCode: null,
       lastErrorMessage: null,
-      lastSeenAt: input.timestamp,
+      lastSeenAt: seenAt,
     };
 
     this.sessions.set(record);
@@ -103,7 +104,7 @@ export class DeviceSessionManager {
       activeCommandRequestId: null,
       lastErrorCode: null,
       lastErrorMessage: null,
-      lastSeenAt: input.timestamp,
+      lastSeenAt: seenAt,
     });
 
     return sessionId;
@@ -125,20 +126,21 @@ export class DeviceSessionManager {
     return true;
   }
 
-  markInboundSeen(deviceId: string, sessionId: string, socketId: string, timestamp: number): boolean {
+  markInboundSeen(deviceId: string, sessionId: string, socketId: string): boolean {
+    const seenAt = Date.now();
     const current = this.sessions.get(deviceId);
     if (!current || !this.matchesCurrentSession(deviceId, sessionId, socketId)) {
       return false;
     }
 
-    current.lastSeenAt = timestamp;
+    current.lastSeenAt = seenAt;
     current.connected = true;
     current.sessionState = "ONLINE";
     this.sessions.set(current);
 
     const runtime = this.runtimes.get(deviceId);
     if (runtime) {
-      runtime.lastSeenAt = timestamp;
+      runtime.lastSeenAt = seenAt;
       this.runtimes.set(runtime);
     }
     return true;
@@ -154,7 +156,8 @@ export class DeviceSessionManager {
       return false;
     }
 
-    this.markInboundSeen(input.deviceId, input.sessionId, input.socketId, input.timestamp);
+    const seenAt = Date.now();
+    this.markInboundSeen(input.deviceId, input.sessionId, input.socketId);
     const current = this.sessions.get(input.deviceId);
     if (!current) {
       return false;
@@ -165,7 +168,7 @@ export class DeviceSessionManager {
     current.activeCommandRequestId = input.payload.activeCommandRequestId;
     current.lastErrorCode = null;
     current.lastErrorMessage = null;
-    current.lastSeenAt = input.timestamp;
+    current.lastSeenAt = seenAt;
     current.connected = true;
     current.sessionState = "ONLINE";
     this.sessions.set(current);
@@ -177,12 +180,13 @@ export class DeviceSessionManager {
       activeCommandRequestId: input.payload.activeCommandRequestId,
       lastErrorCode: null,
       lastErrorMessage: null,
-      lastSeenAt: input.timestamp,
+      lastSeenAt: seenAt,
     });
     return true;
   }
 
   applyPhoneStateUpdate(input: PhoneStateUpdateInput): boolean {
+    const seenAt = Date.now();
     const current = this.sessions.get(input.deviceId);
     if (!current || !this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
       return false;
@@ -191,7 +195,7 @@ export class DeviceSessionManager {
     current.setupState = input.payload.setupState;
     current.runtimeState = input.payload.runtimeState;
     current.uplinkState = input.payload.uplinkState;
-    current.lastSeenAt = input.timestamp;
+    current.lastSeenAt = seenAt;
     current.connected = true;
     current.sessionState = "ONLINE";
     current.activeCommandRequestId = input.payload.activeCommandRequestId;
@@ -206,7 +210,7 @@ export class DeviceSessionManager {
       activeCommandRequestId: input.payload.activeCommandRequestId,
       lastErrorCode: input.payload.lastErrorCode ?? null,
       lastErrorMessage: input.payload.lastErrorMessage ?? null,
-      lastSeenAt: input.timestamp,
+      lastSeenAt: seenAt,
     });
     return true;
   }
