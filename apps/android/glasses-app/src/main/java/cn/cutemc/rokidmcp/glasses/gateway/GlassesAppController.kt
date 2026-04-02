@@ -60,6 +60,7 @@ class GlassesAppController(
         runtimeStore.replace(
             runtimeStore.snapshot.value.copy(
                 runtimeState = GlassesRuntimeState.DISCONNECTED,
+                lastErrorMessage = null,
             ),
         )
     }
