@@ -252,4 +252,38 @@ describe("DeviceSessionManager", () => {
     expect(status.device.uplinkState).toBe("ERROR");
     expect(status.device.activeCommandRequestId).toBe("cmd_123");
   });
+
+  test("uses server time for lastSeenAt instead of client timestamp", () => {
+    const manager = createManager();
+
+    const sessionId = manager.registerHello({
+      deviceId: "device-server-time",
+      socketId: "socket-server-time",
+      timestamp: 1,
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["display_text"],
+      },
+    });
+
+    const afterHello = manager.getCurrentDeviceStatus("device-server-time");
+    expect(afterHello.device.lastSeenAt).not.toBe(1);
+
+    manager.markHeartbeat({
+      deviceId: "device-server-time",
+      sessionId,
+      socketId: "socket-server-time",
+      timestamp: 2,
+      payload: {
+        runtimeState: "BUSY",
+        uplinkState: "ERROR",
+        activeCommandRequestId: null,
+      },
+    });
+
+    const afterHeartbeat = manager.getCurrentDeviceStatus("device-server-time");
+    expect(afterHeartbeat.device.lastSeenAt).not.toBe(2);
+  });
 });
