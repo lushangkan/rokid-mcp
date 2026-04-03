@@ -122,10 +122,16 @@ class PhoneSettingsViewModel(
         }
 
         coroutineScope.launch {
-            withContext(ioDispatcher) {
-                persistCurrentConfig(state)
+            val saveResult = runCatching {
+                withContext(ioDispatcher) {
+                    persistCurrentConfig(state)
+                }
             }
-            _uiState.value = _uiState.value.copy(saveMessage = "Saved")
+            _uiState.value = if (saveResult.isSuccess) {
+                _uiState.value.copy(saveMessage = "Saved")
+            } else {
+                _uiState.value.copy(saveMessage = "Save failed")
+            }
         }
         return true
     }
