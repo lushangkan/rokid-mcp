@@ -111,7 +111,7 @@ export class DeviceSessionManager {
   }
 
   confirmHello(deviceId: string, sessionId: string, socketId?: string): boolean {
-    const current = this.sessions.get(deviceId);
+    const current = this.getCurrentSession(deviceId);
     if (!current || current.sessionId !== sessionId) {
       return false;
     }
@@ -128,7 +128,7 @@ export class DeviceSessionManager {
 
   markInboundSeen(deviceId: string, sessionId: string, socketId: string): boolean {
     const seenAt = Date.now();
-    const current = this.sessions.get(deviceId);
+    const current = this.getCurrentSession(deviceId);
     if (!current || !this.matchesCurrentSession(deviceId, sessionId, socketId)) {
       return false;
     }
@@ -138,7 +138,7 @@ export class DeviceSessionManager {
     current.sessionState = "ONLINE";
     this.sessions.set(current);
 
-    const runtime = this.runtimes.get(deviceId);
+    const runtime = this.getCurrentRuntime(deviceId);
     if (runtime) {
       runtime.lastSeenAt = seenAt;
       this.runtimes.set(runtime);
@@ -147,7 +147,7 @@ export class DeviceSessionManager {
   }
 
   matchesCurrentSession(deviceId: string, sessionId: string, socketId: string): boolean {
-    const current = this.sessions.get(deviceId);
+    const current = this.getCurrentSession(deviceId);
     return Boolean(current && current.sessionId === sessionId && current.socketId === socketId);
   }
 
@@ -158,7 +158,7 @@ export class DeviceSessionManager {
 
     const seenAt = Date.now();
     this.markInboundSeen(input.deviceId, input.sessionId, input.socketId);
-    const current = this.sessions.get(input.deviceId);
+    const current = this.getCurrentSession(input.deviceId);
     if (!current) {
       return false;
     }
@@ -187,7 +187,7 @@ export class DeviceSessionManager {
 
   applyPhoneStateUpdate(input: PhoneStateUpdateInput): boolean {
     const seenAt = Date.now();
-    const current = this.sessions.get(input.deviceId);
+    const current = this.getCurrentSession(input.deviceId);
     if (!current || !this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
       return false;
     }
@@ -216,7 +216,7 @@ export class DeviceSessionManager {
   }
 
   closeCurrentSession(deviceId: string, sessionId: string, socketId: string): boolean {
-    const current = this.sessions.get(deviceId);
+    const current = this.getCurrentSession(deviceId);
     if (!current || !this.matchesCurrentSession(deviceId, sessionId, socketId)) {
       return false;
     }
@@ -235,7 +235,7 @@ export class DeviceSessionManager {
 
   getCurrentDeviceStatus(deviceId: string): GetDeviceStatusResponse {
     const now = Date.now();
-    const current = this.sessions.get(deviceId);
+    const current = this.getCurrentSession(deviceId);
 
     if (!current) {
       return {
@@ -258,7 +258,7 @@ export class DeviceSessionManager {
       };
     }
 
-    const runtime = this.runtimes.get(deviceId);
+    const runtime = this.getCurrentRuntime(deviceId);
     const stale = current.sessionState === "STALE";
     const closed = current.sessionState === "CLOSED" || current.connected === false;
 
@@ -324,5 +324,13 @@ export class DeviceSessionManager {
 
   private isStale(record: CurrentSessionRecord, now: number): boolean {
     return now - record.lastSeenAt > this.heartbeatTimeoutMs;
+  }
+
+  private getCurrentSession(deviceId: string): CurrentSessionRecord | undefined {
+    return this.sessions.get(deviceId);
+  }
+
+  private getCurrentRuntime(deviceId: string): CurrentRuntimeSnapshot | undefined {
+    return this.runtimes.get(deviceId);
   }
 }

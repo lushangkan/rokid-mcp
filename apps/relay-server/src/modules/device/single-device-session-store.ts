@@ -23,21 +23,27 @@ export type CurrentSessionRecord = {
 };
 
 export class SingleDeviceSessionStore {
-  private readonly records = new Map<string, CurrentSessionRecord>();
+  private current: CurrentSessionRecord | undefined;
 
   get(deviceId: string): CurrentSessionRecord | undefined {
-    return this.records.get(deviceId);
+    if (!this.current || this.current.deviceId !== deviceId) {
+      return undefined;
+    }
+
+    return this.current;
   }
 
   set(record: CurrentSessionRecord): void {
-    this.records.set(record.deviceId, record);
+    this.current = record;
   }
 
   delete(deviceId: string): void {
-    this.records.delete(deviceId);
+    if (this.current?.deviceId === deviceId) {
+      this.current = undefined;
+    }
   }
 
   values(): IterableIterator<CurrentSessionRecord> {
-    return this.records.values();
+    return [this.current].filter((record): record is CurrentSessionRecord => record !== undefined).values();
   }
 }

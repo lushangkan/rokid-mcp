@@ -70,6 +70,49 @@ describe("DeviceSessionManager", () => {
     expect(status.device.capabilities).toEqual(["capture_photo"]);
   });
 
+  test("different-device hello replaces singleton context and old device becomes synthetic offline", () => {
+    const manager = createManager();
+
+    const oldSessionId = manager.registerHello({
+      deviceId: "device-old",
+      socketId: "socket-old",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["display_text"],
+      },
+    });
+
+    const newSessionId = manager.registerHello({
+      deviceId: "device-new",
+      socketId: "socket-new",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "BUSY",
+        uplinkState: "ERROR",
+        capabilities: ["capture_photo"],
+      },
+    });
+
+    const oldStatus = manager.getCurrentDeviceStatus("device-old");
+    const newStatus = manager.getCurrentDeviceStatus("device-new");
+
+    expect(oldSessionId).not.toBe(newSessionId);
+    expect(manager.matchesCurrentSession("device-old", oldSessionId, "socket-old")).toBe(false);
+    expect(manager.matchesCurrentSession("device-new", newSessionId, "socket-new")).toBe(true);
+    expect(oldStatus.device.connected).toBe(false);
+    expect(oldStatus.device.sessionState).toBe("OFFLINE");
+    expect(oldStatus.device.runtimeState).toBe("DISCONNECTED");
+    expect(oldStatus.device.sessionId).toBeNull();
+    expect(newStatus.device.connected).toBe(true);
+    expect(newStatus.device.sessionState).toBe("ONLINE");
+    expect(newStatus.device.sessionId).toBe(newSessionId);
+    expect(newStatus.device.capabilities).toEqual(["capture_photo"]);
+  });
+
   test("late close from old socket does not clear current session", () => {
     const manager = createManager();
 
@@ -103,6 +146,113 @@ describe("DeviceSessionManager", () => {
     expect(status.device.connected).toBe(true);
     expect(status.device.sessionState).toBe("ONLINE");
     expect(status.device.sessionId).toBe(newSessionId);
+  });
+
+  test("old device heartbeat does not affect current singleton", () => {
+    const manager = createManager();
+
+    const oldSessionId = manager.registerHello({
+      deviceId: "device-heartbeat-old",
+      socketId: "socket-heartbeat-old",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["display_text"],
+      },
+    });
+
+    const newSessionId = manager.registerHello({
+      deviceId: "device-heartbeat-new",
+      socketId: "socket-heartbeat-new",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["capture_photo"],
+      },
+    });
+
+    const accepted = manager.markHeartbeat({
+      deviceId: "device-heartbeat-old",
+      sessionId: oldSessionId,
+      socketId: "socket-heartbeat-old",
+      timestamp: Date.now(),
+      payload: {
+        runtimeState: "BUSY",
+        uplinkState: "ERROR",
+        activeCommandRequestId: "cmd_old",
+      },
+    });
+
+    const oldStatus = manager.getCurrentDeviceStatus("device-heartbeat-old");
+    const newStatus = manager.getCurrentDeviceStatus("device-heartbeat-new");
+
+    expect(accepted).toBe(false);
+    expect(oldStatus.device.sessionState).toBe("OFFLINE");
+    expect(oldStatus.device.sessionId).toBeNull();
+    expect(newStatus.device.sessionId).toBe(newSessionId);
+    expect(newStatus.device.runtimeState).toBe("READY");
+    expect(newStatus.device.uplinkState).toBe("ONLINE");
+    expect(newStatus.device.activeCommandRequestId).toBeNull();
+  });
+
+  test("old device phone state update does not affect current singleton", () => {
+    const manager = createManager();
+
+    const oldSessionId = manager.registerHello({
+      deviceId: "device-phone-old",
+      socketId: "socket-phone-old",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["display_text"],
+      },
+    });
+
+    const newSessionId = manager.registerHello({
+      deviceId: "device-phone-new",
+      socketId: "socket-phone-new",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "READY",
+        uplinkState: "ONLINE",
+        capabilities: ["capture_photo"],
+      },
+    });
+
+    const accepted = manager.applyPhoneStateUpdate({
+      deviceId: "device-phone-old",
+      sessionId: oldSessionId,
+      socketId: "socket-phone-old",
+      timestamp: Date.now(),
+      payload: {
+        setupState: "INITIALIZED",
+        runtimeState: "BUSY",
+        uplinkState: "ERROR",
+        activeCommandRequestId: "cmd_old",
+        lastErrorCode: "OLD_ERR",
+        lastErrorMessage: "old device update",
+      },
+    });
+
+    const oldStatus = manager.getCurrentDeviceStatus("device-phone-old");
+    const newStatus = manager.getCurrentDeviceStatus("device-phone-new");
+
+    expect(accepted).toBe(false);
+    expect(oldStatus.device.sessionState).toBe("OFFLINE");
+    expect(oldStatus.device.sessionId).toBeNull();
+    expect(newStatus.device.sessionId).toBe(newSessionId);
+    expect(newStatus.device.runtimeState).toBe("READY");
+    expect(newStatus.device.uplinkState).toBe("ONLINE");
+    expect(newStatus.device.activeCommandRequestId).toBeNull();
+    expect(newStatus.device.lastErrorCode).toBeNull();
+    expect(newStatus.device.lastErrorMessage).toBeNull();
   });
 
   test("stale session forces disconnected runtime on query after cleanup interval fires", async () => {
