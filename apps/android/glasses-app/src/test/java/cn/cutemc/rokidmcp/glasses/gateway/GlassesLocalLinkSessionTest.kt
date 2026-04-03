@@ -1,5 +1,7 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
+import android.os.Build
+import cn.cutemc.rokidmcp.glasses.BuildConfig
 import cn.cutemc.rokidmcp.share.protocol.HelloPayload
 import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.LinkRole
@@ -55,6 +57,8 @@ class GlassesLocalLinkSessionTest {
             listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
             (helloAck.payload as HelloAckPayload).capabilities,
         )
+        assertEquals(Build.MODEL, (helloAck.payload as HelloAckPayload).glassesInfo?.model)
+        assertEquals(BuildConfig.VERSION_NAME, (helloAck.payload as HelloAckPayload).glassesInfo?.appVersion)
         assertEquals(
             LocalRuntimeState.READY,
             (helloAck.payload as HelloAckPayload).runtimeState,
