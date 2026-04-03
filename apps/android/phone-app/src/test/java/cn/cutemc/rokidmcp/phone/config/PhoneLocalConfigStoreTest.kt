@@ -1,27 +1,32 @@
 package cn.cutemc.rokidmcp.phone.config
 
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.io.File
-import java.nio.file.Files
-import java.util.Properties
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class PhoneLocalConfigStoreTest {
-    private lateinit var tempDir: File
+    private lateinit var prefs: SharedPreferences
+    private lateinit var store: PhoneLocalConfigStore
 
     @Before
     fun setUp() {
-        tempDir = Files.createTempDirectory("phone-local-config-store-test").toFile()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        prefs = context.getSharedPreferences("test_phone_local_config", Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+        store = PhoneLocalConfigStore(prefs)
     }
 
     @Test
-    fun `load without existing file creates default config with valid deviceId`() {
-        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
-
+    fun `load without existing data creates default config with valid deviceId`() {
         val config = store.load()
 
         assertNotNull(config.deviceId)
@@ -32,7 +37,6 @@ class PhoneLocalConfigStoreTest {
 
     @Test
     fun `save then load returns persisted config`() {
-        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
         val expected = PhoneLocalConfig(
             deviceId = "phone-1234abcd",
             authToken = "token-abc",
@@ -47,8 +51,6 @@ class PhoneLocalConfigStoreTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun `save rejects invalid deviceId`() {
-        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
-
         store.save(
             PhoneLocalConfig(
                 deviceId = "bad id",
@@ -66,10 +68,8 @@ class PhoneLocalConfigStoreTest {
     }
 
     @Test
-    fun `load recovers with default when config content is corrupted`() {
-        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
-        val corruptedFile = File(tempDir, "phone-local-config.properties")
-        corruptedFile.writeText("deviceId=phone-ab12cd34\\u12")
+    fun `load recovers with default when stored deviceId is invalid`() {
+        prefs.edit().putString("deviceId", "bad id!!").commit()
 
         val config = store.load()
 
@@ -79,20 +79,14 @@ class PhoneLocalConfigStoreTest {
     }
 
     @Test
-    fun `load supports legacy json filename with properties content`() {
-        val store = PhoneLocalConfigStore(filesDirProvider = { tempDir })
-        val legacyFile = File(tempDir, "phone-local-config.json")
-        Properties().apply {
-            setProperty("deviceId", "phone-ab12cd34")
-            setProperty("authToken", "token-legacy")
-            setProperty("relayBaseUrl", "https://relay.legacy")
-            legacyFile.outputStream().use { store(it, null) }
-        }
+    fun `load recovers with default when deviceId is missing but other fields are present`() {
+        prefs.edit()
+            .putString("authToken", "token-abc")
+            .putString("relayBaseUrl", "https://relay.example.com")
+            .commit()
 
-        val loaded = store.load()
+        val config = store.load()
 
-        assertEquals("phone-ab12cd34", loaded.deviceId)
-        assertEquals("token-legacy", loaded.authToken)
-        assertEquals("https://relay.legacy", loaded.relayBaseUrl)
+        assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
     }
 }
