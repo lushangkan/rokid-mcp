@@ -13,11 +13,7 @@ export type CurrentRuntimeSnapshot = {
 export class SingleDeviceRuntimeStore {
   private current: CurrentRuntimeSnapshot | undefined;
 
-  get(deviceId: string): CurrentRuntimeSnapshot | undefined {
-    if (!this.current || this.current.deviceId !== deviceId) {
-      return undefined;
-    }
-
+  get(): CurrentRuntimeSnapshot | undefined {
     return this.current;
   }
 
@@ -25,9 +21,19 @@ export class SingleDeviceRuntimeStore {
     this.current = snapshot;
   }
 
-  delete(deviceId: string): void {
-    if (this.current?.deviceId === deviceId) {
-      this.current = undefined;
+  patch(update: Partial<CurrentRuntimeSnapshot>): CurrentRuntimeSnapshot | undefined {
+    if (!this.current) {
+      return undefined;
     }
+
+    this.current = {
+      ...this.current,
+      ...update,
+    };
+    return this.current;
+  }
+
+  clear(): void {
+    this.current = undefined;
   }
 }

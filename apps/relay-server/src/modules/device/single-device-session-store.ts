@@ -25,11 +25,7 @@ export type CurrentSessionRecord = {
 export class SingleDeviceSessionStore {
   private current: CurrentSessionRecord | undefined;
 
-  get(deviceId: string): CurrentSessionRecord | undefined {
-    if (!this.current || this.current.deviceId !== deviceId) {
-      return undefined;
-    }
-
+  get(): CurrentSessionRecord | undefined {
     return this.current;
   }
 
@@ -37,13 +33,20 @@ export class SingleDeviceSessionStore {
     this.current = record;
   }
 
-  delete(deviceId: string): void {
-    if (this.current?.deviceId === deviceId) {
-      this.current = undefined;
+  patch(update: Partial<CurrentSessionRecord>): CurrentSessionRecord | undefined {
+    if (!this.current) {
+      return undefined;
     }
+
+    this.current = {
+      ...this.current,
+      ...update,
+    };
+
+    return this.current;
   }
 
-  values(): IterableIterator<CurrentSessionRecord> {
-    return [this.current].filter((record): record is CurrentSessionRecord => record !== undefined).values();
+  clear(): void {
+    this.current = undefined;
   }
 }
