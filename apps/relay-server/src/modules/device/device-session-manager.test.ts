@@ -36,7 +36,6 @@ describe("DeviceSessionManager", () => {
     const oldSessionId = manager.registerHello({
       deviceId: "device-a",
       socketId: "socket-old",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -49,7 +48,6 @@ describe("DeviceSessionManager", () => {
     const newSessionId = manager.registerHello({
       deviceId: "device-a",
       socketId: "socket-new",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
@@ -76,7 +74,6 @@ describe("DeviceSessionManager", () => {
     const oldSessionId = manager.registerHello({
       deviceId: "device-old",
       socketId: "socket-old",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -88,7 +85,6 @@ describe("DeviceSessionManager", () => {
     const newSessionId = manager.registerHello({
       deviceId: "device-new",
       socketId: "socket-new",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
@@ -119,7 +115,6 @@ describe("DeviceSessionManager", () => {
     const oldSessionId = manager.registerHello({
       deviceId: "device-b",
       socketId: "socket-old",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -131,7 +126,6 @@ describe("DeviceSessionManager", () => {
     const newSessionId = manager.registerHello({
       deviceId: "device-b",
       socketId: "socket-new",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -154,7 +148,6 @@ describe("DeviceSessionManager", () => {
     const oldSessionId = manager.registerHello({
       deviceId: "device-heartbeat-old",
       socketId: "socket-heartbeat-old",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -166,7 +159,6 @@ describe("DeviceSessionManager", () => {
     const newSessionId = manager.registerHello({
       deviceId: "device-heartbeat-new",
       socketId: "socket-heartbeat-new",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -179,7 +171,6 @@ describe("DeviceSessionManager", () => {
       deviceId: "device-heartbeat-old",
       sessionId: oldSessionId,
       socketId: "socket-heartbeat-old",
-      timestamp: Date.now(),
       payload: {
         runtimeState: "BUSY",
         uplinkState: "ERROR",
@@ -205,7 +196,6 @@ describe("DeviceSessionManager", () => {
     const oldSessionId = manager.registerHello({
       deviceId: "device-phone-old",
       socketId: "socket-phone-old",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -217,7 +207,6 @@ describe("DeviceSessionManager", () => {
     const newSessionId = manager.registerHello({
       deviceId: "device-phone-new",
       socketId: "socket-phone-new",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -230,7 +219,6 @@ describe("DeviceSessionManager", () => {
       deviceId: "device-phone-old",
       sessionId: oldSessionId,
       socketId: "socket-phone-old",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
@@ -263,7 +251,6 @@ describe("DeviceSessionManager", () => {
       manager.registerHello({
         deviceId: "device-stale",
         socketId: "socket-stale",
-        timestamp: Date.now(),
         payload: {
           setupState: "INITIALIZED",
           runtimeState: "READY",
@@ -292,7 +279,6 @@ describe("DeviceSessionManager", () => {
     manager.registerHello({
       deviceId: "device-no-cleanup",
       socketId: "socket-no-cleanup",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -314,7 +300,6 @@ describe("DeviceSessionManager", () => {
     const sessionId = manager.registerHello({
       deviceId: "device-closed",
       socketId: "socket-closed",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -339,7 +324,6 @@ describe("DeviceSessionManager", () => {
     const sessionId = manager.registerHello({
       deviceId: "device-fallback",
       socketId: "socket-fallback",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -352,7 +336,6 @@ describe("DeviceSessionManager", () => {
       deviceId: "device-fallback",
       sessionId,
       socketId: "socket-fallback",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
@@ -361,7 +344,7 @@ describe("DeviceSessionManager", () => {
       },
     });
 
-    (manager as unknown as { runtimes: { delete: (deviceId: string) => void } }).runtimes.delete("device-fallback");
+    (manager as unknown as { runtimes: { clear: () => void } }).runtimes.clear();
 
     const status = manager.getCurrentDeviceStatus("device-fallback");
     expect(status.device.runtimeState).toBe("BUSY");
@@ -374,7 +357,6 @@ describe("DeviceSessionManager", () => {
     const sessionId = manager.registerHello({
       deviceId: "device-heartbeat-fallback",
       socketId: "socket-heartbeat-fallback",
-      timestamp: Date.now(),
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -387,7 +369,6 @@ describe("DeviceSessionManager", () => {
       deviceId: "device-heartbeat-fallback",
       sessionId,
       socketId: "socket-heartbeat-fallback",
-      timestamp: Date.now(),
       payload: {
         runtimeState: "BUSY",
         uplinkState: "ERROR",
@@ -395,7 +376,7 @@ describe("DeviceSessionManager", () => {
       },
     });
 
-    (manager as unknown as { runtimes: { delete: (deviceId: string) => void } }).runtimes.delete("device-heartbeat-fallback");
+    (manager as unknown as { runtimes: { clear: () => void } }).runtimes.clear();
 
     const status = manager.getCurrentDeviceStatus("device-heartbeat-fallback");
     expect(status.device.runtimeState).toBe("BUSY");
@@ -403,13 +384,12 @@ describe("DeviceSessionManager", () => {
     expect(status.device.activeCommandRequestId).toBe("cmd_123");
   });
 
-  test("uses server time for lastSeenAt instead of client timestamp", () => {
+  test("uses server time progression for lastSeenAt", async () => {
     const manager = createManager();
 
     const sessionId = manager.registerHello({
       deviceId: "device-server-time",
       socketId: "socket-server-time",
-      timestamp: 1,
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
@@ -419,13 +399,14 @@ describe("DeviceSessionManager", () => {
     });
 
     const afterHello = manager.getCurrentDeviceStatus("device-server-time");
-    expect(afterHello.device.lastSeenAt).not.toBe(1);
+    expect(afterHello.device.lastSeenAt).not.toBeNull();
+
+    await Bun.sleep(5);
 
     manager.markHeartbeat({
       deviceId: "device-server-time",
       sessionId,
       socketId: "socket-server-time",
-      timestamp: 2,
       payload: {
         runtimeState: "BUSY",
         uplinkState: "ERROR",
@@ -434,6 +415,7 @@ describe("DeviceSessionManager", () => {
     });
 
     const afterHeartbeat = manager.getCurrentDeviceStatus("device-server-time");
-    expect(afterHeartbeat.device.lastSeenAt).not.toBe(2);
+    expect(afterHeartbeat.device.lastSeenAt).not.toBeNull();
+    expect(afterHeartbeat.device.lastSeenAt!).toBeGreaterThan(afterHello.device.lastSeenAt!);
   });
 });

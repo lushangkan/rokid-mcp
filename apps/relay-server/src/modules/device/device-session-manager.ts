@@ -18,7 +18,6 @@ import {
 type RegisterHelloInput = {
   deviceId: string;
   socketId: string;
-  timestamp: number;
   payload: {
     setupState: SetupState;
     runtimeState: RuntimeState;
@@ -31,7 +30,6 @@ type HeartbeatInput = {
   deviceId: string;
   sessionId: string;
   socketId: string;
-  timestamp: number;
   payload: {
     runtimeState: RuntimeState;
     uplinkState: UplinkState;
@@ -43,7 +41,6 @@ type PhoneStateUpdateInput = {
   deviceId: string;
   sessionId: string;
   socketId: string;
-  timestamp: number;
   payload: {
     setupState: SetupState;
     runtimeState: RuntimeState;
@@ -111,8 +108,8 @@ export class DeviceSessionManager {
   }
 
   confirmHello(deviceId: string, sessionId: string, socketId?: string): boolean {
-    const current = this.getCurrentSession(deviceId);
-    if (!current || current.sessionId !== sessionId) {
+    const current = this.sessions.get();
+    if (!current || current.deviceId !== deviceId || current.sessionId !== sessionId) {
       return false;
     }
 
@@ -120,58 +117,61 @@ export class DeviceSessionManager {
       return false;
     }
 
-    current.connected = true;
-    current.sessionState = "ONLINE";
-    this.sessions.set(current);
+    this.sessions.patch({
+      connected: true,
+      sessionState: "ONLINE",
+    });
     return true;
   }
 
   markInboundSeen(deviceId: string, sessionId: string, socketId: string): boolean {
     const seenAt = Date.now();
-    const current = this.getCurrentSession(deviceId);
+    const current = this.sessions.get();
     if (!current || !this.matchesCurrentSession(deviceId, sessionId, socketId)) {
       return false;
     }
 
-    current.lastSeenAt = seenAt;
-    current.connected = true;
-    current.sessionState = "ONLINE";
-    this.sessions.set(current);
+    this.sessions.patch({
+      lastSeenAt: seenAt,
+      connected: true,
+      sessionState: "ONLINE",
+    });
 
-    const runtime = this.getCurrentRuntime(deviceId);
-    if (runtime) {
-      runtime.lastSeenAt = seenAt;
-      this.runtimes.set(runtime);
+    if (this.runtimes.get()?.deviceId === deviceId) {
+      this.runtimes.patch({
+        lastSeenAt: seenAt,
+      });
     }
     return true;
   }
 
   matchesCurrentSession(deviceId: string, sessionId: string, socketId: string): boolean {
-    const current = this.getCurrentSession(deviceId);
-    return Boolean(current && current.sessionId === sessionId && current.socketId === socketId);
+    const current = this.sessions.get();
+    return Boolean(
+      current &&
+        current.deviceId === deviceId &&
+        current.sessionId === sessionId &&
+        current.socketId === socketId,
+    );
   }
 
   markHeartbeat(input: HeartbeatInput): boolean {
-    if (!this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
-      return false;
-    }
-
     const seenAt = Date.now();
-    this.markInboundSeen(input.deviceId, input.sessionId, input.socketId);
-    const current = this.getCurrentSession(input.deviceId);
-    if (!current) {
+    const current = this.sessions.get();
+    if (!current || !this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
       return false;
     }
 
-    current.runtimeState = input.payload.runtimeState;
-    current.uplinkState = input.payload.uplinkState;
-    current.activeCommandRequestId = input.payload.activeCommandRequestId;
-    current.lastErrorCode = null;
-    current.lastErrorMessage = null;
-    current.lastSeenAt = seenAt;
-    current.connected = true;
-    current.sessionState = "ONLINE";
-    this.sessions.set(current);
+    this.sessions.patch({
+      runtimeState: input.payload.runtimeState,
+      uplinkState: input.payload.uplinkState,
+      activeCommandRequestId: input.payload.activeCommandRequestId,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      lastSeenAt: seenAt,
+      connected: true,
+      sessionState: "ONLINE",
+    });
 
     this.runtimes.set({
       deviceId: input.deviceId,
@@ -187,21 +187,22 @@ export class DeviceSessionManager {
 
   applyPhoneStateUpdate(input: PhoneStateUpdateInput): boolean {
     const seenAt = Date.now();
-    const current = this.getCurrentSession(input.deviceId);
+    const current = this.sessions.get();
     if (!current || !this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
       return false;
     }
 
-    current.setupState = input.payload.setupState;
-    current.runtimeState = input.payload.runtimeState;
-    current.uplinkState = input.payload.uplinkState;
-    current.lastSeenAt = seenAt;
-    current.connected = true;
-    current.sessionState = "ONLINE";
-    current.activeCommandRequestId = input.payload.activeCommandRequestId;
-    current.lastErrorCode = input.payload.lastErrorCode ?? null;
-    current.lastErrorMessage = input.payload.lastErrorMessage ?? null;
-    this.sessions.set(current);
+    this.sessions.patch({
+      setupState: input.payload.setupState,
+      runtimeState: input.payload.runtimeState,
+      uplinkState: input.payload.uplinkState,
+      lastSeenAt: seenAt,
+      connected: true,
+      sessionState: "ONLINE",
+      activeCommandRequestId: input.payload.activeCommandRequestId,
+      lastErrorCode: input.payload.lastErrorCode ?? null,
+      lastErrorMessage: input.payload.lastErrorMessage ?? null,
+    });
 
     this.runtimes.set({
       deviceId: input.deviceId,
@@ -216,28 +217,29 @@ export class DeviceSessionManager {
   }
 
   closeCurrentSession(deviceId: string, sessionId: string, socketId: string): boolean {
-    const current = this.getCurrentSession(deviceId);
+    const current = this.sessions.get();
     if (!current || !this.matchesCurrentSession(deviceId, sessionId, socketId)) {
       return false;
     }
 
-    current.connected = false;
-    current.sessionState = "CLOSED";
-    current.runtimeState = "DISCONNECTED";
-    current.uplinkState = "OFFLINE";
-    current.activeCommandRequestId = null;
-    current.lastErrorCode = null;
-    current.lastErrorMessage = null;
-    this.sessions.set(current);
-    this.runtimes.delete(deviceId);
+    this.sessions.patch({
+      connected: false,
+      sessionState: "CLOSED",
+      runtimeState: "DISCONNECTED",
+      uplinkState: "OFFLINE",
+      activeCommandRequestId: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+    });
+    this.runtimes.clear();
     return true;
   }
 
   getCurrentDeviceStatus(deviceId: string): GetDeviceStatusResponse {
     const now = Date.now();
-    const current = this.getCurrentSession(deviceId);
+    const current = this.sessions.get();
 
-    if (!current) {
+    if (!current || current.deviceId !== deviceId) {
       return {
         ok: true,
         device: {
@@ -258,7 +260,7 @@ export class DeviceSessionManager {
       };
     }
 
-    const runtime = this.getCurrentRuntime(deviceId);
+    const runtime = this.runtimes.get();
     const stale = current.sessionState === "STALE";
     const closed = current.sessionState === "CLOSED" || current.connected === false;
 
@@ -302,35 +304,27 @@ export class DeviceSessionManager {
   }
 
   private sweepStaleSessions(now: number): void {
-    for (const record of this.sessions.values()) {
-      if (!this.isStale(record, now) || record.sessionState !== "ONLINE") {
-        continue;
-      }
-
-      record.connected = false;
-      record.sessionState = "STALE";
-      this.sessions.set(record);
-      this.runtimes.set({
-        deviceId: record.deviceId,
-        runtimeState: "DISCONNECTED",
-        uplinkState: "OFFLINE",
-        activeCommandRequestId: null,
-        lastErrorCode: null,
-        lastErrorMessage: null,
-        lastSeenAt: record.lastSeenAt,
-      } satisfies CurrentRuntimeSnapshot);
+    const record = this.sessions.get();
+    if (!record || !this.isStale(record, now) || record.sessionState !== "ONLINE") {
+      return;
     }
+
+    this.sessions.patch({
+      connected: false,
+      sessionState: "STALE",
+    });
+    this.runtimes.set({
+      deviceId: record.deviceId,
+      runtimeState: "DISCONNECTED",
+      uplinkState: "OFFLINE",
+      activeCommandRequestId: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      lastSeenAt: record.lastSeenAt,
+    } satisfies CurrentRuntimeSnapshot);
   }
 
   private isStale(record: CurrentSessionRecord, now: number): boolean {
     return now - record.lastSeenAt > this.heartbeatTimeoutMs;
-  }
-
-  private getCurrentSession(deviceId: string): CurrentSessionRecord | undefined {
-    return this.sessions.get(deviceId);
-  }
-
-  private getCurrentRuntime(deviceId: string): CurrentRuntimeSnapshot | undefined {
-    return this.runtimes.get(deviceId);
   }
 }
