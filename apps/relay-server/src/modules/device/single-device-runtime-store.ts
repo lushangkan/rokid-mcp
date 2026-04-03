@@ -11,17 +11,23 @@ export type CurrentRuntimeSnapshot = {
 };
 
 export class SingleDeviceRuntimeStore {
-  private readonly snapshots = new Map<string, CurrentRuntimeSnapshot>();
+  private current: CurrentRuntimeSnapshot | undefined;
 
   get(deviceId: string): CurrentRuntimeSnapshot | undefined {
-    return this.snapshots.get(deviceId);
+    if (!this.current || this.current.deviceId !== deviceId) {
+      return undefined;
+    }
+
+    return this.current;
   }
 
   set(snapshot: CurrentRuntimeSnapshot): void {
-    this.snapshots.set(snapshot.deviceId, snapshot);
+    this.current = snapshot;
   }
 
   delete(deviceId: string): void {
-    this.snapshots.delete(deviceId);
+    if (this.current?.deviceId === deviceId) {
+      this.current = undefined;
+    }
   }
 }
