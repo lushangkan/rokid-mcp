@@ -14,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Files
+import java.io.File
 
 class PhoneSettingsViewModelTest {
     @Test
@@ -160,5 +161,44 @@ class PhoneSettingsViewModelTest {
         scope.testScheduler.runCurrent()
 
         assertEquals(cn.cutemc.rokidmcp.phone.gateway.GatewayRunState.IDLE, controller.runState.value)
+    }
+
+    @Test
+    fun `save failure sets error message instead of success`() = runTest {
+        val tempDir = Files.createTempDirectory("phone-settings-vm-test").toFile()
+        val configStore = PhoneLocalConfigStore(filesDirProvider = { tempDir })
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+        scope.testScheduler.runCurrent()
+
+        val configPath = File(tempDir, "phone-local-config.properties")
+        configPath.delete()
+        configPath.mkdirs()
+
+        viewModel.onDeviceIdChanged("phone-ab12cd34")
+        assertTrue(viewModel.save())
+        scope.testScheduler.runCurrent()
+
+        assertEquals("Save failed", viewModel.uiState.value.saveMessage)
     }
 }

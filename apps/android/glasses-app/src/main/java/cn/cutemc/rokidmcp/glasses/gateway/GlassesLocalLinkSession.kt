@@ -23,8 +23,13 @@ class GlassesLocalLinkSession(
     private val sessionScope: CoroutineScope,
 ) {
     private var eventJob: Job? = null
+    private val glassesCapabilities = listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO)
 
     suspend fun start() {
+        if (eventJob?.isActive == true) {
+            return
+        }
+
         eventJob = sessionScope.launch {
             transport.events.collect { event ->
                 when (event) {
@@ -68,9 +73,7 @@ class GlassesLocalLinkSession(
                     model = "Rokid",
                     appVersion = "1.0.0",
                 ),
-                capabilities = hello.supportedActions.ifEmpty {
-                    listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO)
-                },
+                capabilities = glassesCapabilities,
                 runtimeState = LocalRuntimeState.READY,
             ),
         )
