@@ -20,8 +20,10 @@ class FakeRfcommServerTransport : RfcommServerTransport {
 
     val sentFrames: MutableList<SentFrame> = mutableListOf()
     val stopReasons: MutableList<String> = mutableListOf()
+    var startCount: Int = 0
 
     override suspend fun start() {
+        startCount += 1
         internalState.value = GlassesTransportState.LISTENING
         internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.LISTENING))
     }
