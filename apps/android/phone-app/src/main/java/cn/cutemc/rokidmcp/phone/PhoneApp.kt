@@ -13,7 +13,7 @@ class PhoneApp : Application() {
     val uiLogStore = PhoneUiLogStore()
     val logStore = PhoneLogStore(uiLogStore)
     val localConfigStore: PhoneLocalConfigStore by lazy {
-        PhoneLocalConfigStore(filesDirProvider = { filesDir })
+        PhoneLocalConfigStore(getSharedPreferences("phone_local_config", MODE_PRIVATE))
     }
     val appController: PhoneAppController by lazy {
         PhoneAppController(
