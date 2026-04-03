@@ -52,6 +52,10 @@ class GlassesLocalLinkSessionTest {
         assertEquals(LocalMessageType.HELLO_ACK, helloAck.type)
         assertTrue((helloAck.payload as HelloAckPayload).accepted)
         assertEquals(
+            listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
+            (helloAck.payload as HelloAckPayload).capabilities,
+        )
+        assertEquals(
             LocalRuntimeState.READY,
             (helloAck.payload as HelloAckPayload).runtimeState,
         )
@@ -166,5 +170,57 @@ class GlassesLocalLinkSessionTest {
 
         assertEquals(listOf("user requested"), transport.stopReasons)
         assertEquals(GlassesRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `start is idempotent and does not re-start transport`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_300L),
+            sessionScope = backgroundScope,
+        )
+
+        session.start()
+        runCurrent()
+        session.start()
+        runCurrent()
+
+        assertEquals(1, transport.startCount)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `connection closed clears stale error message`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_400L),
+            sessionScope = backgroundScope,
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(GlassesTransportEvent.Failure(IllegalStateException("temporary")))
+        runCurrent()
+        assertEquals(GlassesRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("temporary", runtimeStore.snapshot.value.lastErrorMessage)
+
+        transport.emit(GlassesTransportEvent.ConnectionClosed("closed"))
+        runCurrent()
+
+        assertEquals(GlassesRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+        assertEquals(null, runtimeStore.snapshot.value.lastErrorMessage)
+
+        session.stop("test complete")
     }
 }
