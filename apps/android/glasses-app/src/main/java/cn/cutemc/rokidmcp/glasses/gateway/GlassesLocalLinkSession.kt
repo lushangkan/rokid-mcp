@@ -1,5 +1,7 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
+import android.os.Build
+import cn.cutemc.rokidmcp.glasses.BuildConfig
 import cn.cutemc.rokidmcp.share.protocol.GlassesInfo
 import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.HelloPayload
@@ -70,8 +72,8 @@ class GlassesLocalLinkSession(
                 accepted = true,
                 role = LinkRole.GLASSES,
                 glassesInfo = GlassesInfo(
-                    model = "Rokid",
-                    appVersion = "1.0.0",
+                    model = Build.MODEL,
+                    appVersion = BuildConfig.VERSION_NAME,
                 ),
                 capabilities = glassesCapabilities,
                 runtimeState = LocalRuntimeState.READY,
