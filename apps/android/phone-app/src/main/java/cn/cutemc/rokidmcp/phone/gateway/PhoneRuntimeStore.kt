@@ -27,6 +27,7 @@ data class PhoneRuntimeSnapshot(
     val setupState: PhoneSetupState = PhoneSetupState.UNINITIALIZED,
     val runtimeState: PhoneRuntimeState = PhoneRuntimeState.DISCONNECTED,
     val uplinkState: PhoneUplinkState = PhoneUplinkState.OFFLINE,
+    val lastSeenAt: Long? = null,
     val activeCommandRequestId: String? = null,
     val lastErrorCode: String? = null,
     val lastErrorMessage: String? = null,
