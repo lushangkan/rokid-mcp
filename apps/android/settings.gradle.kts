@@ -25,3 +25,4 @@ rootProject.name = "RokidMCPAndroid"
 include(":phone-app")
 include(":glasses-app")
 include(":share")
+include(":integration-tests")
