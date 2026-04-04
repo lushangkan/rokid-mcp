@@ -46,6 +46,14 @@ class PhoneAppController(
     private val clock: Clock = SystemClock,
     private val controllerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val supportedActions: List<LocalAction> = listOf(LocalAction.DISPLAY_TEXT),
+    private val createRelaySessionClient: (PhoneGatewayConfig) -> RelaySessionClient = { config ->
+        RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = clock,
+            config = config,
+            controllerScope = controllerScope,
+        )
+    },
 ) {
     private val _runState = MutableStateFlow(GatewayRunState.IDLE)
     val runState: StateFlow<GatewayRunState> = _runState
@@ -54,8 +62,13 @@ class PhoneAppController(
 
     private var transport: RfcommClientTransport? = null
     private var localSession: PhoneLocalLinkSession? = null
+    private var relaySessionClient: RelaySessionClient? = null
     private var transportEventsJob: Job? = null
     private var sessionEventsJob: Job? = null
+    private var relayEventsJob: Job? = null
+    private var lastReportedSnapshot: PhoneRuntimeSnapshot? = null
+    private var currentTransportState: PhoneTransportState = PhoneTransportState.IDLE
+    private var isLocalSessionReady: Boolean = false
 
     suspend fun start(targetDeviceAddress: String, preloadedConfig: PhoneGatewayConfig? = null) {
         if (_runState.value != GatewayRunState.IDLE && localSession != null) {
@@ -86,6 +99,9 @@ class PhoneAppController(
 
         _runState.value = GatewayRunState.STARTING
         Timber.tag("controller").i("start requested for $targetDeviceAddress")
+        lastReportedSnapshot = null
+        currentTransportState = PhoneTransportState.CONNECTING
+        isLocalSessionReady = false
 
         val createdTransport = try {
             createTransport()
@@ -102,6 +118,7 @@ class PhoneAppController(
             supportedActions = supportedActions,
         )
         val createdSession = createLocalSession(createdTransport, helloConfig, clock, controllerScope)
+        val createdRelaySessionClient = createRelaySessionClient(config)
 
         transportEventsJob?.cancel()
         transportEventsJob = controllerScope.launch {
@@ -140,9 +157,16 @@ class PhoneAppController(
             createdSession.events.collect(::handleLocalSessionEvent)
         }
 
+        relayEventsJob?.cancel()
+        relayEventsJob = controllerScope.launch {
+            createdRelaySessionClient.events.collect(::handleRelaySessionEvent)
+        }
+
         transport = createdTransport
         localSession = createdSession
+        relaySessionClient = createdRelaySessionClient
         try {
+            createdRelaySessionClient.connect()
             createdSession.start(targetDeviceAddress)
         } catch (error: Throwable) {
             markStartupFailure(
@@ -165,6 +189,11 @@ class PhoneAppController(
     }
 
     fun applyTransportState(state: PhoneTransportState) {
+        currentTransportState = state
+        if (state != PhoneTransportState.CONNECTED) {
+            isLocalSessionReady = false
+        }
+
         val nextRuntime = when (state) {
             PhoneTransportState.CONNECTING,
             PhoneTransportState.CONNECTED,
@@ -175,46 +204,55 @@ class PhoneAppController(
             PhoneTransportState.ERROR -> PhoneRuntimeState.ERROR
         }
 
+        val current = runtimeStore.snapshot.value
+        val desiredRuntime = projectRuntimeState(current.uplinkState, nextRuntime)
+
         runtimeStore.replace(
-            runtimeStore.snapshot.value.copy(
-                runtimeState = nextRuntime,
-                lastErrorCode = if (nextRuntime == PhoneRuntimeState.ERROR) {
-                    runtimeStore.snapshot.value.lastErrorCode
+            current.copy(
+                runtimeState = desiredRuntime,
+                lastErrorCode = if (desiredRuntime == PhoneRuntimeState.ERROR) {
+                    current.lastErrorCode
                 } else {
                     null
                 },
-                lastErrorMessage = if (nextRuntime == PhoneRuntimeState.ERROR) {
-                    runtimeStore.snapshot.value.lastErrorMessage
+                lastErrorMessage = if (desiredRuntime == PhoneRuntimeState.ERROR) {
+                    current.lastErrorMessage
                 } else {
                     null
                 },
             ),
         )
+        controllerScope.launch {
+            reportIfNeeded(runtimeStore.snapshot.value)
+        }
     }
 
     suspend fun handleLocalSessionEvent(event: PhoneLocalSessionEvent) {
         when (event) {
             PhoneLocalSessionEvent.SessionReady -> {
                 _runState.value = GatewayRunState.RUNNING
-                runtimeStore.replace(
-                    runtimeStore.snapshot.value.copy(
-                        runtimeState = PhoneRuntimeState.READY,
-                        lastErrorCode = null,
-                        lastErrorMessage = null,
-                    ),
+                isLocalSessionReady = true
+                val current = runtimeStore.snapshot.value
+                val next = current.copy(
+                    runtimeState = projectRuntimeState(current.uplinkState, PhoneRuntimeState.CONNECTING),
+                    lastErrorCode = null,
+                    lastErrorMessage = null,
                 )
+                runtimeStore.replace(next)
+                reportIfNeeded(next)
             }
 
             is PhoneLocalSessionEvent.HelloRejected -> {
                 _runState.value = GatewayRunState.STOPPED
+                isLocalSessionReady = false
                 stopActiveSession("session failed")
-                runtimeStore.replace(
-                    runtimeStore.snapshot.value.copy(
+                val next = runtimeStore.snapshot.value.copy(
                         runtimeState = PhoneRuntimeState.DISCONNECTED,
                         lastErrorCode = event.code,
                         lastErrorMessage = event.message,
-                    ),
                 )
+                runtimeStore.replace(next)
+                reportIfNeeded(next)
             }
 
             is PhoneLocalSessionEvent.PongReceived -> {
@@ -227,24 +265,51 @@ class PhoneAppController(
 
             is PhoneLocalSessionEvent.SessionFailed -> {
                 _runState.value = GatewayRunState.STOPPED
+                isLocalSessionReady = false
                 stopActiveSession("session failed")
-                runtimeStore.replace(
-                    runtimeStore.snapshot.value.copy(
+                val next = runtimeStore.snapshot.value.copy(
                         runtimeState = PhoneRuntimeState.DISCONNECTED,
                         lastErrorCode = event.code,
                         lastErrorMessage = event.message,
-                    ),
                 )
+                runtimeStore.replace(next)
+                reportIfNeeded(next)
+            }
+        }
+    }
+
+    suspend fun handleRelaySessionEvent(event: RelaySessionEvent) {
+        when (event) {
+            RelaySessionEvent.Connected -> Unit
+            is RelaySessionEvent.UplinkStateChanged -> {
+                val current = runtimeStore.snapshot.value
+                val next = current.copy(
+                    uplinkState = event.state,
+                    runtimeState = projectRuntimeState(event.state, current.runtimeState),
+                )
+                runtimeStore.replace(next)
+                reportIfNeeded(next)
+            }
+            is RelaySessionEvent.Failed -> {
+                val next = runtimeStore.snapshot.value.copy(
+                    uplinkState = PhoneUplinkState.ERROR,
+                    lastErrorCode = "RELAY_SESSION_ERROR",
+                    lastErrorMessage = event.message,
+                )
+                runtimeStore.replace(next)
+                reportIfNeeded(next)
             }
         }
     }
 
     private suspend fun stopActiveSession(reason: String) {
+        relaySessionClient?.disconnect(reason)
         localSession?.stop(reason)
         clearActiveSession()
     }
 
     private suspend fun terminateActiveSession(reason: String) {
+        relaySessionClient?.disconnect(reason)
         localSession?.terminate(reason)
         clearActiveSession()
     }
@@ -252,6 +317,8 @@ class PhoneAppController(
     private fun cancelObservers() {
         sessionEventsJob?.cancel()
         sessionEventsJob = null
+        relayEventsJob?.cancel()
+        relayEventsJob = null
         transportEventsJob?.cancel()
         transportEventsJob = null
     }
@@ -260,6 +327,9 @@ class PhoneAppController(
         cancelObservers()
         transport = null
         localSession = null
+        relaySessionClient = null
+        currentTransportState = PhoneTransportState.IDLE
+        isLocalSessionReady = false
     }
 
     private fun markStartupFailure(code: String, message: String) {
@@ -271,5 +341,50 @@ class PhoneAppController(
                 lastErrorMessage = message,
             ),
         )
+    }
+
+    internal fun shouldReportSnapshotForTest(previous: PhoneRuntimeSnapshot?, next: PhoneRuntimeSnapshot): Boolean {
+        if (previous == null) {
+            return true
+        }
+
+        return previous.setupState != next.setupState ||
+            previous.runtimeState != next.runtimeState ||
+            previous.uplinkState != next.uplinkState ||
+            previous.lastErrorCode != next.lastErrorCode ||
+            previous.lastErrorMessage != next.lastErrorMessage ||
+            previous.activeCommandRequestId != next.activeCommandRequestId
+    }
+
+    internal suspend fun reportSnapshotForTest(next: PhoneRuntimeSnapshot) {
+        reportIfNeeded(next)
+    }
+
+    private fun projectRuntimeState(
+        uplinkState: PhoneUplinkState,
+        fallbackRuntime: PhoneRuntimeState,
+    ): PhoneRuntimeState {
+        return when {
+            fallbackRuntime == PhoneRuntimeState.ERROR -> PhoneRuntimeState.ERROR
+            currentTransportState == PhoneTransportState.IDLE || currentTransportState == PhoneTransportState.DISCONNECTED -> PhoneRuntimeState.DISCONNECTED
+            currentTransportState == PhoneTransportState.ERROR -> PhoneRuntimeState.ERROR
+            isLocalSessionReady && uplinkState == PhoneUplinkState.ONLINE -> PhoneRuntimeState.READY
+            isLocalSessionReady && uplinkState == PhoneUplinkState.OFFLINE -> PhoneRuntimeState.DISCONNECTED
+            else -> fallbackRuntime
+        }
+    }
+
+    private suspend fun reportIfNeeded(next: PhoneRuntimeSnapshot) {
+        if (!shouldReportSnapshotForTest(lastReportedSnapshot, next)) {
+            return
+        }
+
+        val relayClient = relaySessionClient
+        if (relayClient?.canSendStateUpdate() != true) {
+            return
+        }
+
+        relayClient.sendPhoneStateUpdate(next)
+        lastReportedSnapshot = next
     }
 }
