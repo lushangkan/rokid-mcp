@@ -271,6 +271,73 @@ class PhoneLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `ignores pong when seq matches but nonce does not`() = runTest {
+        val clock = FakeClock(1_717_172_175L)
+        val transport = FakeRfcommClientTransport()
+        val session = PhoneLocalLinkSession(
+            transport = transport,
+            helloConfig = helloConfig,
+            codec = codec,
+            clock = clock,
+            sessionScope = backgroundScope,
+        )
+        val events = mutableListOf<PhoneLocalSessionEvent>()
+
+        backgroundScope.launch {
+            session.events.collect { events += it }
+        }
+
+        session.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO_ACK,
+                    timestamp = 1_717_172_176L,
+                    payload = HelloAckPayload(
+                        accepted = true,
+                        role = LinkRole.GLASSES,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+        clock.advanceBy(5_001L)
+        advanceTimeBy(5_001L)
+        runCurrent()
+
+        val ping = codec.decode(transport.sentBytes.last()).header.payload as PingPayload
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.PONG,
+                    timestamp = 1_717_172_177L,
+                    payload = PongPayload(seq = ping.seq, nonce = "wrong-${ping.nonce}"),
+                ),
+            ),
+        )
+        runCurrent()
+        clock.advanceBy(5_001L)
+        advanceTimeBy(5_001L)
+        runCurrent()
+
+        assertTrue(events.none { it == PhoneLocalSessionEvent.PongReceived(seq = ping.seq, receivedAt = 1_717_177_176L) })
+        assertTrue(
+            events.contains(
+                PhoneLocalSessionEvent.SessionFailed(
+                    code = "BLUETOOTH_PONG_TIMEOUT",
+                    message = "pong not received in time",
+                ),
+            ),
+        )
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `hello ack timeout emits session failed`() = runTest {
         val clock = FakeClock(1_717_172_200L)
         val transport = FakeRfcommClientTransport()
@@ -354,6 +421,99 @@ class PhoneLocalLinkSessionTest {
                     message = "pong not received in time",
                 ),
             ),
+        )
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `sends next ping on the next interval after receiving pong`() = runTest {
+        val clock = FakeClock(1_717_172_350L)
+        val transport = FakeRfcommClientTransport()
+        val session = PhoneLocalLinkSession(
+            transport = transport,
+            helloConfig = helloConfig,
+            codec = codec,
+            clock = clock,
+            sessionScope = backgroundScope,
+        )
+
+        session.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO_ACK,
+                    timestamp = 1_717_172_351L,
+                    payload = HelloAckPayload(
+                        accepted = true,
+                        role = LinkRole.GLASSES,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        clock.advanceBy(5_001L)
+        advanceTimeBy(5_001L)
+        runCurrent()
+
+        val firstPing = codec.decode(transport.sentBytes.last()).header.payload as PingPayload
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.PONG,
+                    timestamp = 1_717_172_352L,
+                    payload = PongPayload(seq = firstPing.seq, nonce = firstPing.nonce),
+                ),
+            ),
+        )
+        runCurrent()
+
+        clock.advanceBy(5_001L)
+        advanceTimeBy(5_001L)
+        runCurrent()
+
+        val pingFrames = transport.sentBytes.map { codec.decode(it).header }.filter { it.type == LocalMessageType.PING }
+        assertEquals(2, pingFrames.size)
+        assertEquals(2L, (pingFrames.last().payload as PingPayload).seq)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `decode failure emits session failed instead of cancelling the session loop`() = runTest {
+        val transport = FakeRfcommClientTransport()
+        val session = PhoneLocalLinkSession(
+            transport = transport,
+            helloConfig = helloConfig,
+            codec = codec,
+            clock = FakeClock(1_717_172_375L),
+            sessionScope = backgroundScope,
+        )
+        val events = mutableListOf<PhoneLocalSessionEvent>()
+
+        backgroundScope.launch {
+            session.events.collect { events += it }
+        }
+
+        session.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+        transport.emitBytes(byteArrayOf(0x01, 0x02, 0x03))
+        runCurrent()
+
+        assertTrue(
+            events.any {
+                it is PhoneLocalSessionEvent.SessionFailed &&
+                    it.code == "BLUETOOTH_PROTOCOL_ERROR" &&
+                    it.message.contains("failed to decode local frame")
+            },
         )
 
         session.stop("test complete")

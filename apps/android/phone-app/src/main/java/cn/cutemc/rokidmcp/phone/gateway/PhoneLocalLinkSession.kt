@@ -10,6 +10,7 @@ import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.LocalProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.PingPayload
 import cn.cutemc.rokidmcp.share.protocol.PongPayload
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -51,6 +52,11 @@ open class PhoneLocalLinkSession(
     private val clock: Clock,
     private val sessionScope: CoroutineScope,
 ) {
+    private data class PendingPong(
+        val seq: Long,
+        val nonce: String,
+    )
+
     private val internalEvents = MutableSharedFlow<PhoneLocalSessionEvent>(extraBufferCapacity = 32)
 
     val events: Flow<PhoneLocalSessionEvent> = internalEvents
@@ -58,8 +64,9 @@ open class PhoneLocalLinkSession(
     private var eventJob: Job? = null
     private var helloTimeoutJob: Job? = null
     private var keepaliveJob: Job? = null
+    private var pongTimeoutJob: Job? = null
     private var nextPingSeq: Long = 1L
-    private var waitingForPong: Long? = null
+    private var waitingForPong: PendingPong? = null
     private var sessionReady = false
 
     open suspend fun start(targetDeviceAddress: String) {
@@ -71,7 +78,7 @@ open class PhoneLocalLinkSession(
             transport.events.collect { event ->
                 when (event) {
                     is PhoneTransportEvent.StateChanged -> handleStateChanged(event.state)
-                    is PhoneTransportEvent.BytesReceived -> handleFrame(codec.decode(event.bytes))
+                    is PhoneTransportEvent.BytesReceived -> handleReceivedBytes(event.bytes)
                     is PhoneTransportEvent.Failure,
                     is PhoneTransportEvent.ConnectionClosed,
                     -> clearSessionState()
@@ -105,6 +112,22 @@ open class PhoneLocalLinkSession(
         waitingForPong = null
         sendHello()
         scheduleHelloTimeout()
+    }
+
+    private suspend fun handleReceivedBytes(bytes: ByteArray) {
+        val frame = try {
+            codec.decode(bytes)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            emitFailure(
+                code = "BLUETOOTH_PROTOCOL_ERROR",
+                message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
+            )
+            return
+        }
+
+        handleFrame(frame)
     }
 
     private suspend fun handleFrame(frame: DecodedFrame) {
@@ -165,14 +188,17 @@ open class PhoneLocalLinkSession(
     }
 
     private suspend fun handlePong(pong: PongPayload) {
-        if (!sessionReady || waitingForPong != pong.seq) {
+        val pendingPong = waitingForPong
+        if (!sessionReady || pendingPong?.seq != pong.seq || pendingPong.nonce != pong.nonce) {
             return
         }
 
         waitingForPong = null
+        pongTimeoutJob?.cancel()
+        pongTimeoutJob = null
         internalEvents.emit(
             PhoneLocalSessionEvent.PongReceived(
-                seq = pong.seq,
+            seq = pong.seq,
                 receivedAt = clock.nowMs(),
             ),
         )
@@ -183,29 +209,49 @@ open class PhoneLocalLinkSession(
         keepaliveJob = sessionScope.launch {
             while (true) {
                 delay(LocalProtocolConstants.PING_INTERVAL_MS)
-                val seq = nextPingSeq++
-                waitingForPong = seq
-                transport.send(
-                    codec.encode(
-                        LocalFrameHeader(
-                            type = LocalMessageType.PING,
-                            timestamp = clock.nowMs(),
-                            payload = PingPayload(
-                                seq = seq,
-                                nonce = "ping-$seq",
-                            ),
-                        ),
-                    ),
-                )
-                delay(LocalProtocolConstants.PONG_TIMEOUT_MS)
-                if (waitingForPong == seq) {
-                    emitFailure(
-                        code = "BLUETOOTH_PONG_TIMEOUT",
-                        message = "pong not received in time",
-                    )
-                    break
+                if (!sessionReady || waitingForPong != null) {
+                    continue
                 }
+
+                sendPing()
             }
+        }
+    }
+
+    private suspend fun sendPing() {
+        val seq = nextPingSeq++
+        val pendingPong = PendingPong(
+            seq = seq,
+            nonce = "ping-$seq",
+        )
+        waitingForPong = pendingPong
+        transport.send(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.PING,
+                    timestamp = clock.nowMs(),
+                    payload = PingPayload(
+                        seq = pendingPong.seq,
+                        nonce = pendingPong.nonce,
+                    ),
+                ),
+            ),
+        )
+        armPongTimeout(pendingPong)
+    }
+
+    private fun armPongTimeout(expectedPong: PendingPong) {
+        pongTimeoutJob?.cancel()
+        pongTimeoutJob = sessionScope.launch {
+            delay(LocalProtocolConstants.PONG_TIMEOUT_MS)
+            if (waitingForPong != expectedPong) {
+                return@launch
+            }
+
+            emitFailure(
+                code = "BLUETOOTH_PONG_TIMEOUT",
+                message = "pong not received in time",
+            )
         }
     }
 
@@ -224,6 +270,8 @@ open class PhoneLocalLinkSession(
         helloTimeoutJob = null
         keepaliveJob?.cancel()
         keepaliveJob = null
+        pongTimeoutJob?.cancel()
+        pongTimeoutJob = null
         sessionReady = false
         waitingForPong = null
     }
