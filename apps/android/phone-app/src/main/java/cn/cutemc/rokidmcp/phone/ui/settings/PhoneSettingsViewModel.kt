@@ -189,7 +189,9 @@ class PhoneSettingsViewModel(
         val hasRequiredConfig = PhoneLocalConfig.isValidDeviceId(deviceId) &&
             authToken.isNotBlank() &&
             relayBaseUrl.isNotBlank()
-        val runStateAllowsStart = runState == GatewayRunState.IDLE || runState == GatewayRunState.STOPPED
+        val runStateAllowsStart = runState == GatewayRunState.IDLE ||
+            runState == GatewayRunState.STOPPED ||
+            runState == GatewayRunState.ERROR
         return hasRequiredConfig && runStateAllowsStart
     }
 
