@@ -3,9 +3,11 @@ package cn.cutemc.rokidmcp.phone.ui.settings
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfigStore
+import cn.cutemc.rokidmcp.phone.gateway.GatewayRunState
 import cn.cutemc.rokidmcp.phone.gateway.PhoneAppController
 import cn.cutemc.rokidmcp.phone.gateway.PhoneGatewayConfig
 import cn.cutemc.rokidmcp.phone.gateway.PhoneLogStore
+import cn.cutemc.rokidmcp.phone.gateway.PhoneLocalSessionEvent
 import cn.cutemc.rokidmcp.phone.gateway.PhoneRuntimeStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -166,6 +168,50 @@ class PhoneSettingsViewModelTest {
         viewModel.startGateway()
         scope.testScheduler.runCurrent()
 
-        assertEquals(cn.cutemc.rokidmcp.phone.gateway.GatewayRunState.IDLE, controller.runState.value)
+        assertEquals(GatewayRunState.IDLE, controller.runState.value)
+    }
+
+    @Test
+    fun `recoverable local link failure keeps start available for retry`() = runTest {
+        val configStore = makeConfigStore("retry_after_local_failure")
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+        scope.testScheduler.runCurrent()
+
+        viewModel.onDeviceIdChanged("phone-ab12cd34")
+        viewModel.onAuthTokenChanged("token-123")
+        viewModel.onRelayBaseUrlChanged("https://relay.example.com")
+        scope.testScheduler.runCurrent()
+
+        controller.handleLocalSessionEvent(
+            PhoneLocalSessionEvent.SessionFailed(
+                code = "BLUETOOTH_PONG_TIMEOUT",
+                message = "pong not received in time",
+            ),
+        )
+        scope.testScheduler.runCurrent()
+
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertTrue(viewModel.uiState.value.canStart)
     }
 }

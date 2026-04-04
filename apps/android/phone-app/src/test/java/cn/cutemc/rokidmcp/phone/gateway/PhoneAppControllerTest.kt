@@ -3,9 +3,19 @@ package cn.cutemc.rokidmcp.phone.gateway
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogLevel
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogTree
+import cn.cutemc.rokidmcp.share.protocol.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.LocalAction
+import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -60,6 +70,7 @@ class PhoneAppControllerTest {
     fun `start uses preloaded config when provided`() = runTest {
         val runtimeStore = PhoneRuntimeStore()
         val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
         val controller = PhoneAppController(
             runtimeStore = runtimeStore,
             logStore = PhoneLogStore(logStore),
@@ -72,6 +83,7 @@ class PhoneAppControllerTest {
                     appVersion = "1.0",
                 )
             },
+            createTransport = { transport },
         )
 
         controller.start(
@@ -85,5 +97,574 @@ class PhoneAppControllerTest {
         )
 
         assertEquals(GatewayRunState.STARTING, controller.runState.value)
+    }
+
+    @Test
+    fun `start fails gracefully when default transport placeholder is unavailable`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = {
+                throw UnsupportedOperationException("RFCOMM transport not implemented yet")
+            },
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+
+        assertEquals(GatewayRunState.ERROR, controller.runState.value)
+        assertEquals(PhoneRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("BLUETOOTH_TRANSPORT_UNAVAILABLE", runtimeStore.snapshot.value.lastErrorCode)
+        assertEquals("RFCOMM transport not implemented yet", runtimeStore.snapshot.value.lastErrorMessage)
+    }
+
+    @Test
+    fun `start fails gracefully when placeholder start throws not implemented error`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = {
+                object : RfcommClientTransport {
+                    override val state = kotlinx.coroutines.flow.MutableStateFlow(PhoneTransportState.IDLE)
+                    override val events = kotlinx.coroutines.flow.MutableSharedFlow<PhoneTransportEvent>()
+
+                    override suspend fun start(targetDeviceAddress: String) {
+                        throw NotImplementedError("RFCOMM transport not implemented yet")
+                    }
+
+                    override suspend fun send(bytes: ByteArray) {
+                        error("unused")
+                    }
+
+                    override suspend fun stop(reason: String) {
+                        error("unused")
+                    }
+                }
+            },
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+
+        assertEquals(GatewayRunState.ERROR, controller.runState.value)
+        assertEquals(PhoneRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("BLUETOOTH_TRANSPORT_UNAVAILABLE", runtimeStore.snapshot.value.lastErrorCode)
+        assertEquals("RFCOMM transport not implemented yet", runtimeStore.snapshot.value.lastErrorMessage)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `repeated start stops previous local session before replacing it`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transports = mutableListOf<FakeRfcommClientTransport>()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = {
+                FakeRfcommClientTransport().also(transports::add)
+            },
+            clock = FakeClock(1_717_171_900L),
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        controller.start(targetDeviceAddress = "AA:BB:CC:DD:EE:FF")
+        runCurrent()
+
+        assertEquals(2, transports.size)
+        assertEquals(listOf("00:11:22:33:44:55"), transports.first().startAddresses)
+        assertEquals(listOf("AA:BB:CC:DD:EE:FF"), transports.last().startAddresses)
+        assertTrue(transports.first().stopReasons.contains("restarting controller session"))
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `transport failure moves run state to error`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.emit(PhoneTransportEvent.Failure(IllegalStateException("rfcomm broken")))
+        runCurrent()
+
+        assertEquals(GatewayRunState.ERROR, controller.runState.value)
+        assertEquals(PhoneRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("BLUETOOTH_TRANSPORT_ERROR", runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `connection closed moves run state to stopped so ui can retry`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.emit(PhoneTransportEvent.ConnectionClosed("closed"))
+        runCurrent()
+
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+        assertNull(runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `connection closed tears down session so timeout does not regress state later`() = runTest {
+        val codec = DefaultLocalFrameCodec()
+        val clock = FakeClock(1_717_171_900L)
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            createLocalSession = { createdTransport, helloConfig, createdClock, scope ->
+                PhoneLocalLinkSession(
+                    transport = createdTransport,
+                    helloConfig = helloConfig,
+                    codec = codec,
+                    clock = createdClock,
+                    sessionScope = scope,
+                )
+            },
+            clock = clock,
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO_ACK,
+                    timestamp = 1_717_171_901L,
+                    payload = HelloAckPayload(
+                        accepted = true,
+                        role = LinkRole.GLASSES,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+        advanceTimeBy(5_001L)
+        runCurrent()
+        transport.emit(PhoneTransportEvent.ConnectionClosed("closed"))
+        runCurrent()
+
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+
+        clock.advanceBy(10_001L)
+        advanceTimeBy(10_001L)
+        runCurrent()
+
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+        assertNull(runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `terminal failure stops local session exactly once`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val recordingSession = RecordingSession(transport)
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            createLocalSession = { _, _, _, _ -> recordingSession },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.emit(PhoneTransportEvent.Failure(IllegalStateException("rfcomm broken")))
+        runCurrent()
+
+        assertEquals(listOf("transport ended"), recordingSession.terminateReasons)
+        assertEquals(emptyList<String>(), recordingSession.stopReasons)
+        assertEquals(GatewayRunState.ERROR, controller.runState.value)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `terminal close stops local session exactly once`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val recordingSession = RecordingSession(transport)
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            createLocalSession = { _, _, _, _ -> recordingSession },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.emit(PhoneTransportEvent.ConnectionClosed("closed"))
+        runCurrent()
+
+        assertEquals(listOf("transport ended"), recordingSession.terminateReasons)
+        assertEquals(emptyList<String>(), recordingSession.stopReasons)
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `restart from error cleans up old session before creating new transport`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transports = mutableListOf<FakeRfcommClientTransport>()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = {
+                FakeRfcommClientTransport().also(transports::add)
+            },
+            clock = FakeClock(1_717_171_950L),
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transports.first().emit(PhoneTransportEvent.Failure(IllegalStateException("rfcomm broken")))
+        runCurrent()
+
+        assertEquals(GatewayRunState.ERROR, controller.runState.value)
+
+        controller.start(targetDeviceAddress = "AA:BB:CC:DD:EE:FF")
+        runCurrent()
+
+        assertEquals(2, transports.size)
+        assertEquals(emptyList<String>(), transports.first().stopReasons)
+        assertEquals(listOf("AA:BB:CC:DD:EE:FF"), transports.last().startAddresses)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `restart after connection closed creates new transport without extra stop on old transport`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transports = mutableListOf<FakeRfcommClientTransport>()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = {
+                FakeRfcommClientTransport().also(transports::add)
+            },
+            clock = FakeClock(1_717_171_975L),
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transports.first().emit(PhoneTransportEvent.ConnectionClosed("closed"))
+        runCurrent()
+
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+
+        controller.start(targetDeviceAddress = "AA:BB:CC:DD:EE:FF")
+        runCurrent()
+
+        assertEquals(2, transports.size)
+        assertEquals(emptyList<String>(), transports.first().stopReasons)
+        assertEquals(listOf("AA:BB:CC:DD:EE:FF"), transports.last().startAddresses)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `hello rejected stops active transport exactly once`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val recordingSession = RecordingSession(transport)
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            createLocalSession = { _, _, _, _ -> recordingSession },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        controller.handleLocalSessionEvent(
+            PhoneLocalSessionEvent.HelloRejected(
+                code = "REJECTED",
+                message = "not available",
+            ),
+        )
+        runCurrent()
+
+        assertEquals(emptyList<String>(), recordingSession.terminateReasons)
+        assertEquals(listOf("session failed"), recordingSession.stopReasons)
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `session failed stops active transport exactly once`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val recordingSession = RecordingSession(transport)
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { transport },
+            createLocalSession = { _, _, _, _ -> recordingSession },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        controller.handleLocalSessionEvent(
+            PhoneLocalSessionEvent.SessionFailed(
+                code = "BLUETOOTH_PONG_TIMEOUT",
+                message = "pong not received in time",
+            ),
+        )
+        runCurrent()
+
+        assertEquals(emptyList<String>(), recordingSession.terminateReasons)
+        assertEquals(listOf("session failed"), recordingSession.stopReasons)
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `controller wires transport and session events into runtime store`() = runTest {
+        val codec = DefaultLocalFrameCodec()
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        var capturedHelloConfig: PhoneHelloConfig? = null
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.2.3",
+                )
+            },
+            createTransport = { transport },
+            createLocalSession = { createdTransport, helloConfig, clock, scope ->
+                capturedHelloConfig = helloConfig
+                PhoneLocalLinkSession(
+                    transport = createdTransport,
+                    helloConfig = helloConfig,
+                    codec = codec,
+                    clock = clock,
+                    sessionScope = scope,
+                )
+            },
+            clock = FakeClock(1_717_171_900L),
+            controllerScope = backgroundScope,
+            supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+
+        assertEquals(listOf("00:11:22:33:44:55"), transport.startAddresses)
+        assertEquals(
+            PhoneHelloConfig(
+                deviceId = "phone-device",
+                appVersion = "1.2.3",
+                supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+            ),
+            capturedHelloConfig,
+        )
+        assertEquals(PhoneRuntimeState.CONNECTING, runtimeStore.snapshot.value.runtimeState)
+
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO_ACK,
+                    timestamp = 1_717_171_901L,
+                    payload = HelloAckPayload(
+                        accepted = true,
+                        role = LinkRole.GLASSES,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(GatewayRunState.RUNNING, controller.runState.value)
+        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+
+        advanceTimeBy(5_001L)
+        runCurrent()
+        val ping = codec.decode(transport.sentBytes.last()).header.payload as cn.cutemc.rokidmcp.share.protocol.PingPayload
+
+        transport.emitBytes(
+            codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.PONG,
+                    timestamp = 1_717_171_902L,
+                    payload = cn.cutemc.rokidmcp.share.protocol.PongPayload(seq = ping.seq, nonce = ping.nonce),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+        assertEquals(1_717_171_900L, runtimeStore.snapshot.value.lastSeenAt)
+    }
+}
+
+private class RecordingSession(
+    private val fakeTransport: FakeRfcommClientTransport,
+) : PhoneLocalLinkSession(
+    transport = fakeTransport,
+    helloConfig = PhoneHelloConfig(
+        deviceId = "phone-device",
+        appVersion = "1.0",
+        supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+    ),
+    codec = DefaultLocalFrameCodec(),
+    clock = FakeClock(1L),
+    sessionScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+) {
+    val stopReasons: MutableList<String> = mutableListOf()
+    val terminateReasons: MutableList<String> = mutableListOf()
+
+    override suspend fun stop(reason: String) {
+        stopReasons += reason
+    }
+
+    override suspend fun terminate(reason: String) {
+        terminateReasons += reason
     }
 }
