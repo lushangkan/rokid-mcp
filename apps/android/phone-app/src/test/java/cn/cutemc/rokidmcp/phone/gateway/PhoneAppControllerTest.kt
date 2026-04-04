@@ -563,6 +563,18 @@ class PhoneAppControllerTest {
         val runtimeStore = PhoneRuntimeStore()
         val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
         val transport = FakeRfcommClientTransport()
+        val relaySessionClient = RelaySessionClient(
+            webSocket = FakeRelayWebSocket(),
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_171_900L),
+            config = PhoneGatewayConfig(
+                deviceId = "phone-device",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.2.3",
+            ),
+            controllerScope = backgroundScope,
+        )
         var capturedHelloConfig: PhoneHelloConfig? = null
         val controller = PhoneAppController(
             runtimeStore = runtimeStore,
@@ -589,9 +601,12 @@ class PhoneAppControllerTest {
             clock = FakeClock(1_717_171_900L),
             controllerScope = backgroundScope,
             supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+            createRelaySessionClient = { relaySessionClient },
         )
 
         controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        controller.handleRelaySessionEvent(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.CONNECTING))
         runCurrent()
 
         assertEquals(listOf("00:11:22:33:44:55"), transport.startAddresses)
@@ -622,7 +637,8 @@ class PhoneAppControllerTest {
         runCurrent()
 
         assertEquals(GatewayRunState.RUNNING, controller.runState.value)
-        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+        assertEquals(PhoneRuntimeState.CONNECTING, runtimeStore.snapshot.value.runtimeState)
+        assertEquals(PhoneUplinkState.CONNECTING, runtimeStore.snapshot.value.uplinkState)
 
         advanceTimeBy(5_001L)
         runCurrent()
@@ -639,8 +655,152 @@ class PhoneAppControllerTest {
         )
         runCurrent()
 
-        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+        assertEquals(PhoneRuntimeState.CONNECTING, runtimeStore.snapshot.value.runtimeState)
         assertEquals(1_717_171_900L, runtimeStore.snapshot.value.lastSeenAt)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `controller sends phone state update only for externally visible snapshot changes`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val webSocket = FakeRelayWebSocket()
+        val relaySessionClient = RelaySessionClient(
+            webSocket = webSocket,
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_171_900L),
+            config = PhoneGatewayConfig(
+                deviceId = "phone-device",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+        )
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            createRelaySessionClient = { relaySessionClient },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        relaySessionClient.onTextMessage(
+            """
+            {
+              "version":"1.0",
+              "type":"hello_ack",
+              "deviceId":"phone-device",
+              "timestamp":1717171901,
+              "payload":{
+                "sessionId":"ses_reporting",
+                "serverTime":1717171901,
+                "heartbeatIntervalMs":5000,
+                "heartbeatTimeoutMs":15000,
+                "limits":{
+                  "maxPendingCommands":1,
+                  "maxImageUploadSizeBytes":10485760,
+                  "acceptedImageContentTypes":["image/jpeg"]
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+        runCurrent()
+
+        controller.applyTransportState(PhoneTransportState.CONNECTED)
+        runCurrent()
+
+        val stateUpdatesAfterConnected = webSocket.sentTexts.filter { it.contains("\"type\":\"phone_state_update\"") }
+        assertEquals(1, stateUpdatesAfterConnected.size)
+        assertTrue(stateUpdatesAfterConnected.last().contains("\"runtimeState\":\"${PhoneRuntimeState.CONNECTING.name}\""))
+        val baselineCount = stateUpdatesAfterConnected.size
+
+        controller.handleLocalSessionEvent(PhoneLocalSessionEvent.PongReceived(seq = 1, receivedAt = 1_717_171_905L))
+        runCurrent()
+        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+
+        runtimeStore.replace(runtimeStore.snapshot.value.copy(lastUpdatedAt = 123L))
+        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+        runCurrent()
+        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+
+        runtimeStore.replace(runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_SAMPLE"))
+        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+        runCurrent()
+        assertEquals(baselineCount + 1, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `local ready does not become externally ready until relay uplink is online`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            controllerScope = backgroundScope,
+        )
+
+        controller.handleRelaySessionEvent(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.CONNECTING))
+        controller.applyTransportState(PhoneTransportState.CONNECTED)
+        controller.handleLocalSessionEvent(PhoneLocalSessionEvent.SessionReady)
+        runCurrent()
+
+        assertEquals(PhoneRuntimeState.CONNECTING, runtimeStore.snapshot.value.runtimeState)
+
+        controller.handleRelaySessionEvent(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.ONLINE))
+        runCurrent()
+
+        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `relay uplink offline drops externally ready runtime to disconnected`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            controllerScope = backgroundScope,
+        )
+
+        controller.applyTransportState(PhoneTransportState.CONNECTED)
+        controller.handleRelaySessionEvent(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.ONLINE))
+        controller.handleLocalSessionEvent(PhoneLocalSessionEvent.SessionReady)
+        runCurrent()
+        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+
+        controller.handleRelaySessionEvent(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
+        runCurrent()
+
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
     }
 }
 
