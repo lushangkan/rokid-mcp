@@ -1,5 +1,5 @@
-import { createDefaultApp } from "./app.js";
-import { readRelayEnv } from "./config/env.js";
+import { createDefaultApp } from "./app.ts";
+import { readRelayEnv } from "./config/env.ts";
 
 const env = readRelayEnv();
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { DeviceSessionManager } from "./device-session-manager.js";
+import { DeviceSessionManager } from "./device-session-manager.ts";
 
 function createManager() {
   return new DeviceSessionManager({
