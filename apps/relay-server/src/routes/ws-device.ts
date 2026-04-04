@@ -7,7 +7,7 @@ import {
 import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
-import type { DeviceSessionManager } from "../modules/device/device-session-manager.js";
+import type { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
 
 type DeviceWsAuthState = {
   deviceId?: string;

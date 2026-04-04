@@ -1,10 +1,10 @@
 import { PROTOCOL_NAME, PROTOCOL_VERSION } from "@rokid-mcp/protocol";
 import { Elysia } from "elysia";
 
-import { readRelayEnv, type RelayEnv } from "./config/env.js";
-import { DeviceSessionManager } from "./modules/device/device-session-manager.js";
-import { createHttpDevicesRoutes } from "./routes/http-devices.js";
-import { createDeviceWsRoutes } from "./routes/ws-device.js";
+import { readRelayEnv, type RelayEnv } from "./config/env.ts";
+import { DeviceSessionManager } from "./modules/device/device-session-manager.ts";
+import { createHttpDevicesRoutes } from "./routes/http-devices.ts";
+import { createDeviceWsRoutes } from "./routes/ws-device.ts";
 
 export type CreateAppOptions = {
   env: RelayEnv;

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createApp, createDefaultApp } from "./app.js";
-import { readRelayEnv } from "./config/env.js";
-import { DeviceSessionManager } from "./modules/device/device-session-manager.js";
+import { createApp, createDefaultApp } from "./app.ts";
+import { readRelayEnv } from "./config/env.ts";
+import { DeviceSessionManager } from "./modules/device/device-session-manager.ts";
 
 const TEST_ENV = {
   host: "127.0.0.1",

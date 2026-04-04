@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { PROTOCOL_VERSION } from "../../../../packages/protocol/src/index.js";
+import { PROTOCOL_VERSION } from "@rokid-mcp/protocol";
 
-import { DeviceSessionManager } from "../modules/device/device-session-manager.js";
-import { buildDeviceWsHandlers } from "./ws-device.js";
+import { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
+import { buildDeviceWsHandlers } from "./ws-device.ts";
 
 type FakeSocket = {
   data: { socketId: string; deviceId?: string; sessionId?: string; authToken?: string };
