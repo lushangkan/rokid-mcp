@@ -1,9 +1,9 @@
-import { createApp } from "./app.js";
+import { createDefaultApp } from "./app.js";
 import { readRelayEnv } from "./config/env.js";
 
 const env = readRelayEnv();
 
-createApp().listen({
+createDefaultApp(env).listen({
   hostname: env.host,
   port: env.port
 }, ({ hostname, port }) => {
