@@ -9,11 +9,11 @@ import type {
 import {
   SingleDeviceRuntimeStore,
   type CurrentRuntimeSnapshot,
-} from "./single-device-runtime-store.js";
+} from "./single-device-runtime-store.ts";
 import {
   SingleDeviceSessionStore,
   type CurrentSessionRecord,
-} from "./single-device-session-store.js";
+} from "./single-device-session-store.ts";
 
 type RegisterHelloInput = {
   deviceId: string;

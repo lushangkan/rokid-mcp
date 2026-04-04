@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { DeviceSessionManager } from "../modules/device/device-session-manager.js";
-import { createHttpDevicesRoutes } from "./http-devices.js";
+import { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
+import { createHttpDevicesRoutes } from "./http-devices.ts";
 
 function createManager() {
   return new DeviceSessionManager({
