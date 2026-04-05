@@ -44,6 +44,12 @@ describe("createRelayClient", () => {
     const result = await client.getDeviceStatus({ deviceId: "rokid_glasses_01" });
     expect(result.ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://relay.example.com/api/v1/devices/rokid_glasses_01/status",
+      expect.objectContaining({
+        method: "GET",
+      }),
+    );
   });
 
   test("maps network failure to MCP_RELAY_REQUEST_FAILED", async () => {

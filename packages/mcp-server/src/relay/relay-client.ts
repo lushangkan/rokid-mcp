@@ -21,12 +21,8 @@ export function createRelayClient(config: RelayClientConfig): RelayClient {
 
       let response: Response;
       try {
-        response = await fetch(`${config.relayBaseUrl}/v1/device/status`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(params),
+        response = await fetch(`${config.relayBaseUrl}/api/v1/devices/${encodeURIComponent(params.deviceId)}/status`, {
+          method: "GET",
           signal: controller.signal,
         });
       } catch (error) {
