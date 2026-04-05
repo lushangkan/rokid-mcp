@@ -10,15 +10,24 @@ import cn.cutemc.rokidmcp.share.protocol.LocalAction
 import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import timber.log.Timber
 
 class PhoneAppControllerTest {
@@ -802,6 +811,126 @@ class PhoneAppControllerTest {
 
         assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `relay failure projects runtime to error`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            controllerScope = backgroundScope,
+        )
+
+        controller.applyTransportState(PhoneTransportState.CONNECTED)
+        controller.handleRelaySessionEvent(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.ONLINE))
+        controller.handleLocalSessionEvent(PhoneLocalSessionEvent.SessionReady)
+        runCurrent()
+        assertEquals(PhoneRuntimeState.READY, runtimeStore.snapshot.value.runtimeState)
+
+        controller.handleRelaySessionEvent(RelaySessionEvent.Failed("boom"))
+        runCurrent()
+
+        assertEquals(PhoneUplinkState.ERROR, runtimeStore.snapshot.value.uplinkState)
+        assertEquals(PhoneRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("RELAY_SESSION_ERROR", runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @Test
+    fun `concurrent report requests only send one phone state update`() = runBlocking {
+        val runtimeStore = PhoneRuntimeStore()
+        val webSocket = BlockingRelayWebSocket()
+        val controllerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + SupervisorJob())
+        val relaySessionClient = RelaySessionClient(
+            webSocket = webSocket,
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_171_900L),
+            config = PhoneGatewayConfig(
+                deviceId = "phone-device",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = controllerScope,
+        )
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            createRelaySessionClient = { relaySessionClient },
+            controllerScope = controllerScope,
+        )
+
+        try {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+            relaySessionClient.onTextMessage(
+                """
+                {
+                  "version":"1.0",
+                  "type":"hello_ack",
+                  "deviceId":"phone-device",
+                  "timestamp":1717171901,
+                  "payload":{
+                    "sessionId":"ses_reporting",
+                    "serverTime":1717171901,
+                    "heartbeatIntervalMs":5000,
+                    "heartbeatTimeoutMs":15000,
+                    "limits":{
+                      "maxPendingCommands":1,
+                      "maxImageUploadSizeBytes":10485760,
+                      "acceptedImageContentTypes":["image/jpeg"]
+                    }
+                  }
+                }
+                """.trimIndent(),
+            )
+
+            controller.applyTransportState(PhoneTransportState.CONNECTED)
+            withTimeout(2_000) {
+                while (webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") } < 1) {
+                    delay(10)
+                }
+            }
+            val baselineCount = webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") }
+            val next = runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_CONCURRENT")
+            runtimeStore.replace(next)
+            webSocket.blockStateUpdates = true
+
+            val first = controllerScope.launch { controller.reportSnapshotForTest(next) }
+            assertTrue(webSocket.firstSendStarted.await(2, TimeUnit.SECONDS))
+
+            val second = controllerScope.launch { controller.reportSnapshotForTest(next) }
+            assertFalse(webSocket.secondSendStarted.await(200, TimeUnit.MILLISECONDS))
+
+            webSocket.releaseFirstSend.countDown()
+            first.join()
+            second.join()
+
+            assertEquals(
+                baselineCount + 1,
+                webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") },
+            )
+        } finally {
+            controllerScope.coroutineContext[Job]?.cancel()
+        }
+    }
 }
 
 private class RecordingSession(
@@ -826,5 +955,31 @@ private class RecordingSession(
 
     override suspend fun terminate(reason: String) {
         terminateReasons += reason
+    }
+}
+
+private class BlockingRelayWebSocket : RelayWebSocket {
+    val sentTexts: MutableList<String> = mutableListOf()
+    val closeCalls: MutableList<Pair<Int, String>> = mutableListOf()
+    val firstSendStarted = CountDownLatch(1)
+    val secondSendStarted = CountDownLatch(1)
+    val releaseFirstSend = CountDownLatch(1)
+    @Volatile var blockStateUpdates: Boolean = false
+
+    @Synchronized
+    override fun sendText(text: String) {
+        val isStateUpdate = text.contains("\"type\":\"phone_state_update\"")
+        if (isStateUpdate && blockStateUpdates && firstSendStarted.count > 0L) {
+            firstSendStarted.countDown()
+            releaseFirstSend.await(2, TimeUnit.SECONDS)
+        } else if (isStateUpdate && blockStateUpdates) {
+            secondSendStarted.countDown()
+        }
+        sentTexts += text
+    }
+
+    @Synchronized
+    override fun close(code: Int, reason: String) {
+        closeCalls += code to reason
     }
 }
