@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 
 data class PhoneGatewayConfig(
@@ -51,6 +53,7 @@ class PhoneAppController(
             runtimeStore = runtimeStore,
             clock = clock,
             config = config,
+            supportedActions = supportedActions,
             controllerScope = controllerScope,
         )
     },
@@ -69,6 +72,7 @@ class PhoneAppController(
     private var lastReportedSnapshot: PhoneRuntimeSnapshot? = null
     private var currentTransportState: PhoneTransportState = PhoneTransportState.IDLE
     private var isLocalSessionReady: Boolean = false
+    private val reportMutex = Mutex()
 
     suspend fun start(targetDeviceAddress: String, preloadedConfig: PhoneGatewayConfig? = null) {
         if (_runState.value != GatewayRunState.IDLE && localSession != null) {
@@ -291,8 +295,10 @@ class PhoneAppController(
                 reportIfNeeded(next)
             }
             is RelaySessionEvent.Failed -> {
-                val next = runtimeStore.snapshot.value.copy(
+                val current = runtimeStore.snapshot.value
+                val next = current.copy(
                     uplinkState = PhoneUplinkState.ERROR,
+                    runtimeState = projectRuntimeState(PhoneUplinkState.ERROR, current.runtimeState),
                     lastErrorCode = "RELAY_SESSION_ERROR",
                     lastErrorMessage = event.message,
                 )
@@ -370,21 +376,24 @@ class PhoneAppController(
             currentTransportState == PhoneTransportState.ERROR -> PhoneRuntimeState.ERROR
             isLocalSessionReady && uplinkState == PhoneUplinkState.ONLINE -> PhoneRuntimeState.READY
             isLocalSessionReady && uplinkState == PhoneUplinkState.OFFLINE -> PhoneRuntimeState.DISCONNECTED
+            isLocalSessionReady && uplinkState == PhoneUplinkState.ERROR -> PhoneRuntimeState.ERROR
             else -> fallbackRuntime
         }
     }
 
     private suspend fun reportIfNeeded(next: PhoneRuntimeSnapshot) {
-        if (!shouldReportSnapshotForTest(lastReportedSnapshot, next)) {
-            return
-        }
+        reportMutex.withLock {
+            if (!shouldReportSnapshotForTest(lastReportedSnapshot, next)) {
+                return
+            }
 
-        val relayClient = relaySessionClient
-        if (relayClient?.canSendStateUpdate() != true) {
-            return
-        }
+            val relayClient = relaySessionClient
+            if (relayClient?.canSendStateUpdate() != true) {
+                return
+            }
 
-        relayClient.sendPhoneStateUpdate(next)
-        lastReportedSnapshot = next
+            relayClient.sendPhoneStateUpdate(next)
+            lastReportedSnapshot = next
+        }
     }
 }
