@@ -1,5 +1,17 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import cn.cutemc.rokidmcp.share.protocol.LocalAction
+import cn.cutemc.rokidmcp.share.protocol.RelayHeartbeatMessage
+import cn.cutemc.rokidmcp.share.protocol.RelayHeartbeatPayload
+import cn.cutemc.rokidmcp.share.protocol.RelayHelloAckMessage
+import cn.cutemc.rokidmcp.share.protocol.RelayHelloMessage
+import cn.cutemc.rokidmcp.share.protocol.RelayHelloPayload
+import cn.cutemc.rokidmcp.share.protocol.RelayMessageType
+import cn.cutemc.rokidmcp.share.protocol.RelayPhoneStateUpdateMessage
+import cn.cutemc.rokidmcp.share.protocol.RelayPhoneStateUpdatePayload
+import cn.cutemc.rokidmcp.share.protocol.RelayRuntimeState
+import cn.cutemc.rokidmcp.share.protocol.RelaySetupState
+import cn.cutemc.rokidmcp.share.protocol.RelayUplinkState
 import java.net.URI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +21,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -85,9 +99,15 @@ class RelaySessionClient(
     private val runtimeStore: PhoneRuntimeStore,
     private val clock: Clock,
     private val config: PhoneGatewayConfig,
+    private val supportedActions: List<LocalAction> = listOf(LocalAction.DISPLAY_TEXT),
     private val webSocket: RelayWebSocket? = null,
     private val webSocketFactory: RelayWebSocketFactory = OkHttpRelayWebSocketFactory(),
     private val controllerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val json: Json = Json {
+        encodeDefaults = true
+        explicitNulls = true
+        ignoreUnknownKeys = true
+    },
 ) {
     private val internalEvents = MutableSharedFlow<RelaySessionEvent>(extraBufferCapacity = 32)
 
@@ -143,18 +163,62 @@ class RelaySessionClient(
 
         val snapshot = runtimeStore.snapshot.value
         activeWebSocket?.sendText(
-            """{"version":"1.0","type":"hello","deviceId":"${escapeJson(config.deviceId)}","timestamp":${clock.nowMs()},"payload":{"authToken":"${escapeJson(requireNotNull(config.authToken))}","appVersion":"${escapeJson(config.appVersion)}","phoneInfo":{},"setupState":"${snapshot.setupState.name}","runtimeState":"${snapshot.runtimeState.name}","uplinkState":"${snapshot.uplinkState.name}","capabilities":["display_text","capture_photo"]}}""",
+            json.encodeToString(
+                RelayHelloMessage.serializer(),
+                RelayHelloMessage(
+                    version = "1.0",
+                    deviceId = config.deviceId,
+                    timestamp = clock.nowMs(),
+                    payload = RelayHelloPayload(
+                        authToken = requireNotNull(config.authToken),
+                        appVersion = config.appVersion,
+                        setupState = snapshot.setupState.toRelaySetupState(),
+                        runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
+                        uplinkState = snapshot.uplinkState.toRelayUplinkState(),
+                        capabilities = supportedActions,
+                    ),
+                ),
+            ),
         )
     }
 
     suspend fun onTextMessage(text: String) {
-        when (extractStringField(text, "type")) {
-            "hello_ack" -> {
-                sessionId = extractStringField(text, "sessionId")
-                heartbeatIntervalMs = extractLongField(text, "heartbeatIntervalMs") ?: heartbeatIntervalMs
+        val messageType = try {
+            json.decodeFromString(RelayMessageEnvelope.serializer(), text).type
+        } catch (_: SerializationException) {
+            null
+        }
+
+        when (messageType) {
+            RelayMessageType.HELLO_ACK -> {
+                val ack = try {
+                    json.decodeFromString(RelayHelloAckMessage.serializer(), text)
+                } catch (error: SerializationException) {
+                    heartbeatJob?.cancel()
+                    heartbeatJob = null
+                    sessionId = null
+                    internalEvents.emit(RelaySessionEvent.Failed(error.message ?: "relay hello_ack parse failure"))
+                    internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
+                    return
+                }
+
+                val ackSessionId = ack.payload.sessionId
+                if (ackSessionId.isNullOrBlank()) {
+                    heartbeatJob?.cancel()
+                    heartbeatJob = null
+                    sessionId = null
+                    internalEvents.emit(RelaySessionEvent.Failed("relay hello_ack missing sessionId"))
+                    internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
+                    return
+                }
+
+                sessionId = ackSessionId
+                heartbeatIntervalMs = ack.payload.heartbeatIntervalMs ?: heartbeatIntervalMs
                 internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.ONLINE))
                 startHeartbeatLoop()
             }
+
+            else -> Unit
         }
     }
 
@@ -176,25 +240,46 @@ class RelaySessionClient(
 
     suspend fun sendHeartbeat(snapshot: PhoneRuntimeSnapshot) {
         val currentSessionId = sessionId ?: return
-        val activeCommandJson = snapshot.activeCommandRequestId?.let {
-            "\"${escapeJson(it)}\""
-        } ?: "null"
         activeWebSocket?.sendText(
-            """{"version":"1.0","type":"heartbeat","deviceId":"${escapeJson(config.deviceId)}","sessionId":"${escapeJson(currentSessionId)}","timestamp":${clock.nowMs()},"payload":{"seq":${heartbeatSeq++},"runtimeState":"${snapshot.runtimeState.name}","uplinkState":"${snapshot.uplinkState.name}","pendingCommandCount":0,"activeCommandRequestId":$activeCommandJson}}""",
+            json.encodeToString(
+                RelayHeartbeatMessage.serializer(),
+                RelayHeartbeatMessage(
+                    version = "1.0",
+                    deviceId = config.deviceId,
+                    sessionId = currentSessionId,
+                    timestamp = clock.nowMs(),
+                    payload = RelayHeartbeatPayload(
+                        seq = heartbeatSeq++,
+                        runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
+                        uplinkState = snapshot.uplinkState.toRelayUplinkState(),
+                        pendingCommandCount = 0,
+                        activeCommandRequestId = snapshot.activeCommandRequestId,
+                    ),
+                ),
+            ),
         )
     }
 
     suspend fun sendPhoneStateUpdate(snapshot: PhoneRuntimeSnapshot) {
         val currentSessionId = sessionId ?: return
-        val lastErrorCodeJson = snapshot.lastErrorCode?.let {
-            ",\"lastErrorCode\":\"${escapeJson(it)}\""
-        }.orEmpty()
-        val lastErrorMessageJson = snapshot.lastErrorMessage?.let {
-            ",\"lastErrorMessage\":\"${escapeJson(it)}\""
-        }.orEmpty()
-        val activeCommandJson = "\"activeCommandRequestId\":null"
         activeWebSocket?.sendText(
-            """{"version":"1.0","type":"phone_state_update","deviceId":"${escapeJson(config.deviceId)}","sessionId":"${escapeJson(currentSessionId)}","timestamp":${clock.nowMs()},"payload":{"setupState":"${snapshot.setupState.name}","runtimeState":"${snapshot.runtimeState.name}","uplinkState":"${snapshot.uplinkState.name}"$lastErrorCodeJson$lastErrorMessageJson,$activeCommandJson}}""",
+            json.encodeToString(
+                RelayPhoneStateUpdateMessage.serializer(),
+                RelayPhoneStateUpdateMessage(
+                    version = "1.0",
+                    deviceId = config.deviceId,
+                    sessionId = currentSessionId,
+                    timestamp = clock.nowMs(),
+                    payload = RelayPhoneStateUpdatePayload(
+                        setupState = snapshot.setupState.toRelaySetupState(),
+                        runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
+                        uplinkState = snapshot.uplinkState.toRelayUplinkState(),
+                        lastErrorCode = snapshot.lastErrorCode,
+                        lastErrorMessage = snapshot.lastErrorMessage,
+                        activeCommandRequestId = snapshot.activeCommandRequestId,
+                    ),
+                ),
+            ),
         )
     }
 
@@ -229,28 +314,34 @@ class RelaySessionClient(
         ).toString()
     }
 
-    private fun extractStringField(text: String, fieldName: String): String? {
-        val regex = Regex("\"$fieldName\"\\s*:\\s*\"([^\"]+)\"")
-        return regex.find(text)?.groupValues?.get(1)
-    }
-
-    private fun extractLongField(text: String, fieldName: String): Long? {
-        val regex = Regex("\"$fieldName\"\\s*:\\s*(\\d+)")
-        return regex.find(text)?.groupValues?.get(1)?.toLongOrNull()
-    }
-
-    private fun escapeJson(value: String): String {
-        return buildString(value.length) {
-            value.forEach { ch ->
-                when (ch) {
-                    '\\' -> append("\\\\")
-                    '"' -> append("\\\"")
-                    '\n' -> append("\\n")
-                    '\r' -> append("\\r")
-                    '\t' -> append("\\t")
-                    else -> append(ch)
-                }
-            }
+    private fun PhoneSetupState.toRelaySetupState(): RelaySetupState {
+        return when (this) {
+            PhoneSetupState.UNINITIALIZED -> RelaySetupState.UNINITIALIZED
+            PhoneSetupState.INITIALIZED -> RelaySetupState.INITIALIZED
         }
     }
+
+    private fun PhoneRuntimeState.toRelayRuntimeState(): RelayRuntimeState {
+        return when (this) {
+            PhoneRuntimeState.DISCONNECTED -> RelayRuntimeState.DISCONNECTED
+            PhoneRuntimeState.CONNECTING -> RelayRuntimeState.CONNECTING
+            PhoneRuntimeState.READY -> RelayRuntimeState.READY
+            PhoneRuntimeState.BUSY -> RelayRuntimeState.BUSY
+            PhoneRuntimeState.ERROR -> RelayRuntimeState.ERROR
+        }
+    }
+
+    private fun PhoneUplinkState.toRelayUplinkState(): RelayUplinkState {
+        return when (this) {
+            PhoneUplinkState.OFFLINE -> RelayUplinkState.OFFLINE
+            PhoneUplinkState.CONNECTING -> RelayUplinkState.CONNECTING
+            PhoneUplinkState.ONLINE -> RelayUplinkState.ONLINE
+            PhoneUplinkState.ERROR -> RelayUplinkState.ERROR
+        }
+    }
+
+    @kotlinx.serialization.Serializable
+    private data class RelayMessageEnvelope(
+        val type: RelayMessageType,
+    )
 }
