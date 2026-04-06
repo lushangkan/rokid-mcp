@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createApp, createDefaultApp } from "./app.ts";
+import { ACTIVE_RELAY_ROUTE_HISTORY, createApp, createDefaultApp } from "./app.ts";
 import { readRelayEnv } from "./config/env.ts";
 import { DeviceSessionManager } from "./modules/device/device-session-manager.ts";
 
@@ -80,6 +80,17 @@ describe("relay app", () => {
         path: "/ws/device",
       }),
     );
+  });
+
+  test("createApp exposes only the cutover status and command routes", () => {
+    const app = createApp({
+      env: TEST_ENV,
+      manager: new DeviceSessionManager({ heartbeatTimeoutMs: 50, cleanupIntervalMs: 10 }),
+    });
+
+    const routeHistory = app.router.history.map(({ method, path }) => ({ method, path }));
+
+    expect(routeHistory).toEqual([...ACTIVE_RELAY_ROUTE_HISTORY]);
   });
 
   test("createDefaultApp starts cleanup for fallback manager", async () => {

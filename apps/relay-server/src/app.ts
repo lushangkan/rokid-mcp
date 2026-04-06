@@ -17,6 +17,16 @@ export type CreateAppOptions = {
   commandService?: CommandService;
 };
 
+export const ACTIVE_RELAY_ROUTE_HISTORY = [
+  { method: "GET", path: "/api/v1/devices/:deviceId/status" },
+  { method: "POST", path: "/api/v1/commands" },
+  { method: "GET", path: "/api/v1/commands/:requestId" },
+  { method: "PUT", path: "/api/v1/images/:imageId" },
+  { method: "GET", path: "/api/v1/images/:imageId" },
+  { method: "WS", path: "/ws/device" },
+  { method: "GET", path: "/health" },
+] as const;
+
 export function createApp(options: CreateAppOptions) {
   const { env, manager } = options;
   const imageService = options.imageService ?? new ImageService();
