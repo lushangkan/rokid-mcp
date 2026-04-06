@@ -1,6 +1,6 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow

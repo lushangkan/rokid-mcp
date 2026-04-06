@@ -1,35 +1,57 @@
+import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
   ErrorResponseSchema,
-  type ErrorResponse,
+  GetCommandStatusResponseSchema,
+  type GetCommandStatusResponse,
   GetDeviceStatusResponseSchema,
   type GetDeviceStatusResponse,
-} from "../../../protocol/src/index.js";
+  SubmitCommandResponseSchema,
+  type SubmitCommandResponse,
+} from "@rokid-mcp/protocol";
 
-type RelayValidationError = ErrorResponse["error"];
+type RelayValidationError = {
+  code: string;
+  message: string;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+};
 
-export type RelayValidationResult =
+export type RelayValidationResult<T> =
   | {
       ok: true;
-      value: GetDeviceStatusResponse;
+      value: T;
     }
   | {
       ok: false;
       error: RelayValidationError;
     };
 
-export function validateRelayGetDeviceStatusResponse(value: unknown): RelayValidationResult {
-  if (Value.Check(GetDeviceStatusResponseSchema, value)) {
+export function validateRelayGetDeviceStatusResponse(value: unknown): RelayValidationResult<GetDeviceStatusResponse> {
+  return validateRelayResponse(value, GetDeviceStatusResponseSchema);
+}
+
+export function validateRelaySubmitCommandResponse(value: unknown): RelayValidationResult<SubmitCommandResponse> {
+  return validateRelayResponse(value, SubmitCommandResponseSchema);
+}
+
+export function validateRelayGetCommandStatusResponse(value: unknown): RelayValidationResult<GetCommandStatusResponse> {
+  return validateRelayResponse(value, GetCommandStatusResponseSchema);
+}
+
+function validateRelayResponse<T>(value: unknown, successSchema: TSchema): RelayValidationResult<T> {
+  if (Value.Check(successSchema, value)) {
     return {
       ok: true,
-      value,
+      value: value as T,
     };
   }
 
-  if (Value.Check(ErrorResponseSchema, value)) {
+  const relayError = toRelayError(value);
+  if (relayError) {
     return {
       ok: false,
-      error: value.error,
+      error: relayError,
     };
   }
 
@@ -41,4 +63,12 @@ export function validateRelayGetDeviceStatusResponse(value: unknown): RelayValid
       retryable: false,
     },
   };
+}
+
+function toRelayError(value: unknown): RelayValidationError | null {
+  if (!Value.Check(ErrorResponseSchema, value)) {
+    return null;
+  }
+
+  return (value as { error: RelayValidationError }).error;
 }

@@ -12,9 +12,9 @@ import cn.cutemc.rokidmcp.phone.gateway.PhoneLocalSessionEvent
 import cn.cutemc.rokidmcp.phone.gateway.PhoneTransportEvent
 import cn.cutemc.rokidmcp.phone.gateway.PhoneTransportState
 import cn.cutemc.rokidmcp.phone.gateway.RfcommClientTransport
-import cn.cutemc.rokidmcp.share.protocol.DefaultLocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -106,7 +106,7 @@ class PhoneGlassesLoopbackTest {
     private fun helloConfig() = PhoneHelloConfig(
         deviceId = "abc12345",
         appVersion = "1.0",
-        supportedActions = listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
+        supportedActions = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
     )
 }
 
