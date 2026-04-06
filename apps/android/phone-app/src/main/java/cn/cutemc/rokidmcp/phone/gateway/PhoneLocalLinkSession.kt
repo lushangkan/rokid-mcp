@@ -1,15 +1,17 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
-import cn.cutemc.rokidmcp.share.protocol.DecodedFrame
-import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
-import cn.cutemc.rokidmcp.share.protocol.HelloPayload
-import cn.cutemc.rokidmcp.share.protocol.LinkRole
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
-import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
-import cn.cutemc.rokidmcp.share.protocol.LocalProtocolConstants
-import cn.cutemc.rokidmcp.share.protocol.PingPayload
-import cn.cutemc.rokidmcp.share.protocol.PongPayload
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolConstants
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
+import cn.cutemc.rokidmcp.share.protocol.local.DecodedFrame
+import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
+import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
+import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -23,7 +25,7 @@ import kotlinx.coroutines.launch
 data class PhoneHelloConfig(
     val deviceId: String,
     val appVersion: String,
-    val supportedActions: List<cn.cutemc.rokidmcp.share.protocol.LocalAction>,
+    val supportedActions: List<CommandAction>,
 )
 
 sealed interface PhoneLocalSessionEvent {
@@ -121,7 +123,7 @@ open class PhoneLocalLinkSession(
             throw error
         } catch (error: Exception) {
             emitFailure(
-                code = "BLUETOOTH_PROTOCOL_ERROR",
+                code = LocalProtocolErrorCodes.BLUETOOTH_PROTOCOL_ERROR,
                 message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
             )
             return
@@ -161,7 +163,7 @@ open class PhoneLocalLinkSession(
             delay(LocalProtocolConstants.HELLO_ACK_TIMEOUT_MS)
             if (!sessionReady) {
                 emitFailure(
-                    code = "BLUETOOTH_HELLO_TIMEOUT",
+                    code = LocalProtocolErrorCodes.BLUETOOTH_HELLO_TIMEOUT,
                     message = "hello ack not received in time",
                 )
             }
@@ -175,7 +177,7 @@ open class PhoneLocalLinkSession(
         if (!ack.accepted) {
             internalEvents.emit(
                 PhoneLocalSessionEvent.HelloRejected(
-                    code = ack.error?.code ?: "BLUETOOTH_HELLO_REJECTED",
+                    code = ack.error?.code ?: LocalProtocolErrorCodes.BLUETOOTH_HELLO_REJECTED,
                     message = ack.error?.message ?: "hello rejected",
                 ),
             )
@@ -249,7 +251,7 @@ open class PhoneLocalLinkSession(
             }
 
             emitFailure(
-                code = "BLUETOOTH_PONG_TIMEOUT",
+                code = LocalProtocolErrorCodes.BLUETOOTH_PONG_TIMEOUT,
                 message = "pong not received in time",
             )
         }

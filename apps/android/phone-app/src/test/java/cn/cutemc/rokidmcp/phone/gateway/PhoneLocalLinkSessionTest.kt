@@ -1,16 +1,16 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
-import cn.cutemc.rokidmcp.share.protocol.DefaultLocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
-import cn.cutemc.rokidmcp.share.protocol.HelloError
-import cn.cutemc.rokidmcp.share.protocol.HelloPayload
-import cn.cutemc.rokidmcp.share.protocol.LinkRole
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
-import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
-import cn.cutemc.rokidmcp.share.protocol.LocalRuntimeState
-import cn.cutemc.rokidmcp.share.protocol.PingPayload
-import cn.cutemc.rokidmcp.share.protocol.PongPayload
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.local.HelloError
+import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
+import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
+import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
+import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -25,7 +25,7 @@ class PhoneLocalLinkSessionTest {
     private val helloConfig = PhoneHelloConfig(
         deviceId = "phone-device",
         appVersion = "1.2.3",
-        supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -50,7 +50,7 @@ class PhoneLocalLinkSessionTest {
         assertEquals(LinkRole.PHONE, (hello.payload as HelloPayload).role)
         assertEquals("phone-device", (hello.payload as HelloPayload).deviceId)
         assertEquals("1.2.3", (hello.payload as HelloPayload).appVersion)
-        assertEquals(listOf(LocalAction.DISPLAY_TEXT), (hello.payload as HelloPayload).supportedActions)
+        assertEquals(listOf(CommandAction.DISPLAY_TEXT), (hello.payload as HelloPayload).supportedActions)
 
         session.stop("test complete")
     }
@@ -84,7 +84,7 @@ class PhoneLocalLinkSessionTest {
                     payload = HelloAckPayload(
                         accepted = true,
                         role = LinkRole.GLASSES,
-                        capabilities = listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
+                        capabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
                         runtimeState = LocalRuntimeState.READY,
                     ),
                 ),

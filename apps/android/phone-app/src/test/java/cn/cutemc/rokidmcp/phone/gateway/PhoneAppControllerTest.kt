@@ -3,12 +3,12 @@ package cn.cutemc.rokidmcp.phone.gateway
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogLevel
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogTree
-import cn.cutemc.rokidmcp.share.protocol.DefaultLocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
-import cn.cutemc.rokidmcp.share.protocol.LinkRole
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
-import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -609,7 +609,7 @@ class PhoneAppControllerTest {
             },
             clock = FakeClock(1_717_171_900L),
             controllerScope = backgroundScope,
-            supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+            supportedActions = listOf(CommandAction.DISPLAY_TEXT),
             createRelaySessionClient = { relaySessionClient },
         )
 
@@ -623,7 +623,7 @@ class PhoneAppControllerTest {
             PhoneHelloConfig(
                 deviceId = "phone-device",
                 appVersion = "1.2.3",
-                supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+                supportedActions = listOf(CommandAction.DISPLAY_TEXT),
             ),
             capturedHelloConfig,
         )
@@ -651,14 +651,14 @@ class PhoneAppControllerTest {
 
         advanceTimeBy(5_001L)
         runCurrent()
-        val ping = codec.decode(transport.sentBytes.last()).header.payload as cn.cutemc.rokidmcp.share.protocol.PingPayload
+        val ping = codec.decode(transport.sentBytes.last()).header.payload as cn.cutemc.rokidmcp.share.protocol.local.PingPayload
 
         transport.emitBytes(
             codec.encode(
                 LocalFrameHeader(
                     type = LocalMessageType.PONG,
                     timestamp = 1_717_171_902L,
-                    payload = cn.cutemc.rokidmcp.share.protocol.PongPayload(seq = ping.seq, nonce = ping.nonce),
+                    payload = cn.cutemc.rokidmcp.share.protocol.local.PongPayload(seq = ping.seq, nonce = ping.nonce),
                 ),
             ),
         )
@@ -940,7 +940,7 @@ private class RecordingSession(
     helloConfig = PhoneHelloConfig(
         deviceId = "phone-device",
         appVersion = "1.0",
-        supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
     ),
     codec = DefaultLocalFrameCodec(),
     clock = FakeClock(1L),

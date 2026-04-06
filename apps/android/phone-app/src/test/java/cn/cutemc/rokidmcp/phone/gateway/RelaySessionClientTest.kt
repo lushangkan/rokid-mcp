@@ -1,6 +1,6 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
@@ -82,7 +82,7 @@ class RelaySessionClientTest {
                 relayBaseUrl = "https://relay.example.com/base",
                 appVersion = "9.9.9",
             ),
-            supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+            supportedActions = listOf(CommandAction.DISPLAY_TEXT),
         )
 
         client.onConnected()

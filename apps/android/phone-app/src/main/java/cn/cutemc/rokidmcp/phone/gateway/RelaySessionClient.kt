@@ -1,17 +1,20 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
-import cn.cutemc.rokidmcp.share.protocol.RelayHeartbeatMessage
-import cn.cutemc.rokidmcp.share.protocol.RelayHeartbeatPayload
-import cn.cutemc.rokidmcp.share.protocol.RelayHelloAckMessage
-import cn.cutemc.rokidmcp.share.protocol.RelayHelloMessage
-import cn.cutemc.rokidmcp.share.protocol.RelayHelloPayload
-import cn.cutemc.rokidmcp.share.protocol.RelayMessageType
-import cn.cutemc.rokidmcp.share.protocol.RelayPhoneStateUpdateMessage
-import cn.cutemc.rokidmcp.share.protocol.RelayPhoneStateUpdatePayload
-import cn.cutemc.rokidmcp.share.protocol.RelayRuntimeState
-import cn.cutemc.rokidmcp.share.protocol.RelaySetupState
-import cn.cutemc.rokidmcp.share.protocol.RelayUplinkState
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.RelayProtocolConstants
+import cn.cutemc.rokidmcp.share.protocol.constants.RuntimeState
+import cn.cutemc.rokidmcp.share.protocol.constants.SetupState
+import cn.cutemc.rokidmcp.share.protocol.constants.UplinkState
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayHeartbeatMessage
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayHeartbeatPayload
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayHelloAckMessage
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayHelloMessage
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayHelloPayload
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayMessageType
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayPhoneInfo
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayPhoneStateUpdateMessage
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayPhoneStateUpdatePayload
+import cn.cutemc.rokidmcp.share.protocol.relay.RelayProtocolJson
 import java.net.URI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -99,15 +102,11 @@ class RelaySessionClient(
     private val runtimeStore: PhoneRuntimeStore,
     private val clock: Clock,
     private val config: PhoneGatewayConfig,
-    private val supportedActions: List<LocalAction> = listOf(LocalAction.DISPLAY_TEXT),
+    private val supportedActions: List<CommandAction> = listOf(CommandAction.DISPLAY_TEXT),
     private val webSocket: RelayWebSocket? = null,
     private val webSocketFactory: RelayWebSocketFactory = OkHttpRelayWebSocketFactory(),
     private val controllerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    private val json: Json = Json {
-        encodeDefaults = true
-        explicitNulls = true
-        ignoreUnknownKeys = true
-    },
+    private val json: Json = RelayProtocolJson.default,
 ) {
     private val internalEvents = MutableSharedFlow<RelaySessionEvent>(extraBufferCapacity = 32)
 
@@ -115,7 +114,7 @@ class RelaySessionClient(
 
     private var activeWebSocket: RelayWebSocket? = webSocket
     private var sessionId: String? = null
-    private var heartbeatIntervalMs: Long = 5_000L
+    private var heartbeatIntervalMs: Long = RelayProtocolConstants.DEFAULT_HEARTBEAT_INTERVAL_MS
     private var heartbeatJob: Job? = null
     private var heartbeatSeq: Long = 0L
 
@@ -166,12 +165,13 @@ class RelaySessionClient(
             json.encodeToString(
                 RelayHelloMessage.serializer(),
                 RelayHelloMessage(
-                    version = "1.0",
+                    version = RelayProtocolConstants.PROTOCOL_VERSION,
                     deviceId = config.deviceId,
                     timestamp = clock.nowMs(),
                     payload = RelayHelloPayload(
                         authToken = requireNotNull(config.authToken),
                         appVersion = config.appVersion,
+                        phoneInfo = RelayPhoneInfo(),
                         setupState = snapshot.setupState.toRelaySetupState(),
                         runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
                         uplinkState = snapshot.uplinkState.toRelayUplinkState(),
@@ -244,7 +244,7 @@ class RelaySessionClient(
             json.encodeToString(
                 RelayHeartbeatMessage.serializer(),
                 RelayHeartbeatMessage(
-                    version = "1.0",
+                    version = RelayProtocolConstants.PROTOCOL_VERSION,
                     deviceId = config.deviceId,
                     sessionId = currentSessionId,
                     timestamp = clock.nowMs(),
@@ -266,7 +266,7 @@ class RelaySessionClient(
             json.encodeToString(
                 RelayPhoneStateUpdateMessage.serializer(),
                 RelayPhoneStateUpdateMessage(
-                    version = "1.0",
+                    version = RelayProtocolConstants.PROTOCOL_VERSION,
                     deviceId = config.deviceId,
                     sessionId = currentSessionId,
                     timestamp = clock.nowMs(),
@@ -314,29 +314,29 @@ class RelaySessionClient(
         ).toString()
     }
 
-    private fun PhoneSetupState.toRelaySetupState(): RelaySetupState {
+    private fun PhoneSetupState.toRelaySetupState(): SetupState {
         return when (this) {
-            PhoneSetupState.UNINITIALIZED -> RelaySetupState.UNINITIALIZED
-            PhoneSetupState.INITIALIZED -> RelaySetupState.INITIALIZED
+            PhoneSetupState.UNINITIALIZED -> SetupState.UNINITIALIZED
+            PhoneSetupState.INITIALIZED -> SetupState.INITIALIZED
         }
     }
 
-    private fun PhoneRuntimeState.toRelayRuntimeState(): RelayRuntimeState {
+    private fun PhoneRuntimeState.toRelayRuntimeState(): RuntimeState {
         return when (this) {
-            PhoneRuntimeState.DISCONNECTED -> RelayRuntimeState.DISCONNECTED
-            PhoneRuntimeState.CONNECTING -> RelayRuntimeState.CONNECTING
-            PhoneRuntimeState.READY -> RelayRuntimeState.READY
-            PhoneRuntimeState.BUSY -> RelayRuntimeState.BUSY
-            PhoneRuntimeState.ERROR -> RelayRuntimeState.ERROR
+            PhoneRuntimeState.DISCONNECTED -> RuntimeState.DISCONNECTED
+            PhoneRuntimeState.CONNECTING -> RuntimeState.CONNECTING
+            PhoneRuntimeState.READY -> RuntimeState.READY
+            PhoneRuntimeState.BUSY -> RuntimeState.BUSY
+            PhoneRuntimeState.ERROR -> RuntimeState.ERROR
         }
     }
 
-    private fun PhoneUplinkState.toRelayUplinkState(): RelayUplinkState {
+    private fun PhoneUplinkState.toRelayUplinkState(): UplinkState {
         return when (this) {
-            PhoneUplinkState.OFFLINE -> RelayUplinkState.OFFLINE
-            PhoneUplinkState.CONNECTING -> RelayUplinkState.CONNECTING
-            PhoneUplinkState.ONLINE -> RelayUplinkState.ONLINE
-            PhoneUplinkState.ERROR -> RelayUplinkState.ERROR
+            PhoneUplinkState.OFFLINE -> UplinkState.OFFLINE
+            PhoneUplinkState.CONNECTING -> UplinkState.CONNECTING
+            PhoneUplinkState.ONLINE -> UplinkState.ONLINE
+            PhoneUplinkState.ERROR -> UplinkState.ERROR
         }
     }
 
