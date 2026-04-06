@@ -178,6 +178,8 @@ object RelayProtocolConstants {
 object LocalProtocolConstants {
     const val PROTOCOL_NAME = LOCAL_PROTOCOL_NAME_VALUE
     const val PROTOCOL_VERSION = PROTOCOL_VERSION_VALUE
+    const val RFCOMM_SERVICE_NAME = "rokid-mcp-local-link"
+    const val RFCOMM_SERVICE_UUID = "00001101-0000-1000-8000-00805f9b34fb"
     const val FRAME_MAGIC = 0x524B4C31
     const val FRAME_HEADER_MAX_BYTES = 8 * 1024
     const val CHUNK_SIZE_BYTES = 16 * 1024
