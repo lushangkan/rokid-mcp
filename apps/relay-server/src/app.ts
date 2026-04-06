@@ -8,7 +8,7 @@ import { ImageService } from "./modules/image/image-service.ts";
 import { createHttpCommandsRoutes } from "./routes/http-commands.ts";
 import { createHttpDevicesRoutes } from "./routes/http-devices.ts";
 import { createHttpImagesRoutes } from "./routes/http-images.ts";
-import { createDeviceWsRoutes } from "./routes/ws-device.ts";
+import { createDeviceWsController } from "./routes/ws-device.ts";
 
 export type CreateAppOptions = {
   env: RelayEnv;
@@ -26,21 +26,27 @@ export function createApp(options: CreateAppOptions) {
       imageReservations: imageService,
       imageStates: imageService,
     });
+  const deviceWs = createDeviceWsController({
+    manager,
+    commandService,
+    heartbeatIntervalMs: env.heartbeatIntervalMs,
+    heartbeatTimeoutMs: env.heartbeatTimeoutMs,
+  });
 
   return new Elysia()
     .state("manager", manager)
     .state("imageService", imageService)
     .state("commandService", commandService)
     .use(createHttpDevicesRoutes({ manager }))
-    .use(createHttpCommandsRoutes({ manager, commandService }))
-    .use(createHttpImagesRoutes({ imageService }))
     .use(
-      createDeviceWsRoutes({
+      createHttpCommandsRoutes({
         manager,
-        heartbeatIntervalMs: env.heartbeatIntervalMs,
-        heartbeatTimeoutMs: env.heartbeatTimeoutMs,
+        commandService,
+        dispatchPendingCommand: deviceWs.dispatchPendingCommand,
       }),
     )
+    .use(createHttpImagesRoutes({ imageService }))
+    .use(deviceWs.app)
     .get("/health", () => ({
       ok: true,
       service: "relay-server",

@@ -43,6 +43,11 @@ export type DispatchCommandResult = {
   message: CommandDispatchMessage;
 };
 
+export type DispatchCommandInput = {
+  requestId: string;
+  sessionId?: string;
+};
+
 export type CommandImageReservationPort = {
   reserve(input: { requestId: string; deviceId: string }): CommandDispatchImage;
 };
@@ -190,14 +195,18 @@ export class CommandService {
     };
   }
 
-  dispatchCommand(requestId: string): DispatchCommandResult {
+  dispatchCommand(input: string | DispatchCommandInput): DispatchCommandResult {
+    const requestId = typeof input === "string" ? input : input.requestId;
+    const sessionIdOverride = typeof input === "string" ? undefined : input.sessionId;
     const current = this.requireCommand(requestId);
     this.assertStatus(current.command.status, ["CREATED"], "dispatch command");
 
     const timestamp = this.clock();
-    const message = this.buildDispatchMessage(current, timestamp);
+    const sessionId = sessionIdOverride ?? current.sessionId;
+    const message = this.buildDispatchMessage(current, timestamp, sessionId);
     const updated = this.updateCommand(requestId, (storedCommand) => ({
       ...storedCommand,
+      sessionId,
       command: {
         ...storedCommand.command,
         status: "DISPATCHED_TO_PHONE",
@@ -440,13 +449,17 @@ export class CommandService {
     return updated;
   }
 
-  private buildDispatchMessage(command: StoredCommand, timestamp: number): CommandDispatchMessage {
+  private buildDispatchMessage(
+    command: StoredCommand,
+    timestamp: number,
+    sessionId: string,
+  ): CommandDispatchMessage {
     return {
       version: PROTOCOL_VERSION,
       type: "command",
       deviceId: command.command.deviceId,
       requestId: command.command.requestId,
-      sessionId: command.sessionId,
+      sessionId,
       timestamp,
       payload:
         command.submission.action === "display_text"
