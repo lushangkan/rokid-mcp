@@ -1,4 +1,6 @@
 import {
+  ACCEPTED_IMAGE_CONTENT_TYPES,
+  DEFAULT_MAX_IMAGE_UPLOAD_SIZE_BYTES,
   PROTOCOL_VERSION,
   RelayDeviceInboundMessageSchema,
   type RelayDeviceInboundMessage,
@@ -50,13 +52,13 @@ function createHelloAckMessage(
       serverTime: Date.now(),
       heartbeatIntervalMs: options.heartbeatIntervalMs,
       heartbeatTimeoutMs: options.heartbeatTimeoutMs,
-      limits: {
-        maxPendingCommands: 1,
-        maxImageUploadSizeBytes: 5_242_880,
-        acceptedImageContentTypes: ["image/jpeg", "image/png"],
+        limits: {
+          maxPendingCommands: 1,
+          maxImageUploadSizeBytes: DEFAULT_MAX_IMAGE_UPLOAD_SIZE_BYTES,
+          acceptedImageContentTypes: [...ACCEPTED_IMAGE_CONTENT_TYPES],
+        },
       },
-    },
-  };
+    };
 }
 
 type ParsedInboundMessage =
@@ -155,6 +157,12 @@ export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
         return;
       }
 
+      if (inbound.type !== "phone_state_update") {
+        return;
+      }
+
+      const activeCommandRequestId = inbound.payload.activeCommandRequestId ?? null;
+
       options.manager.applyPhoneStateUpdate({
         deviceId: inbound.deviceId,
         sessionId: inbound.sessionId,
@@ -163,7 +171,7 @@ export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
           setupState: inbound.payload.setupState,
           runtimeState: inbound.payload.runtimeState,
           uplinkState: inbound.payload.uplinkState,
-          activeCommandRequestId: inbound.payload.activeCommandRequestId,
+          activeCommandRequestId,
           lastErrorCode: inbound.payload.lastErrorCode,
           lastErrorMessage: inbound.payload.lastErrorMessage,
         },
