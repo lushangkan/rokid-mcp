@@ -1,11 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { Value } from "@sinclair/typebox/value";
 import {
+  CommandAckMessageSchema,
+  CommandCancelMessageSchema,
+  CommandDispatchMessageSchema,
+  CommandErrorMessageSchema,
+  CommandResultMessageSchema,
+  CommandStatusMessageSchema,
   RelayHelloMessageSchema,
   RelayHeartbeatMessageSchema,
-  RelayPhoneStateUpdateMessageSchema,
   RelayHelloAckMessageSchema,
   RelayDeviceInboundMessageSchema,
+  RelayDeviceOutboundMessageSchema,
+  RelayPhoneStateUpdateMessageSchema,
 } from "./ws.js";
 
 describe("relay ws schema", () => {
@@ -18,6 +25,7 @@ describe("relay ws schema", () => {
       payload: {
         authToken: "dev_token_xxx",
         appVersion: "0.1.0",
+        appBuild: "12",
         phoneInfo: {},
         setupState: "INITIALIZED",
         runtimeState: "CONNECTING",
@@ -171,6 +179,140 @@ describe("relay ws schema", () => {
     expect(Value.Check(RelayDeviceInboundMessageSchema, message)).toBe(false);
   });
 
+  test("accepts relay command dispatch for capture_photo", () => {
+    const message = {
+      version: "1.0",
+      type: "command",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000000000,
+      payload: {
+        action: "capture_photo",
+        timeoutMs: 90_000,
+        params: {
+          quality: "medium",
+        },
+        image: {
+          imageId: "img_abc123",
+          transferId: "trf_abc123",
+          uploadToken: "123456789012345678901234",
+          contentType: "image/jpeg",
+          expiresAt: 1710000090000,
+          maxSizeBytes: 10485760,
+        },
+      },
+    };
+
+    expect(Value.Check(CommandDispatchMessageSchema, message)).toBe(true);
+    expect(Value.Check(RelayDeviceOutboundMessageSchema, message)).toBe(true);
+  });
+
+  test("accepts command_ack, status, result, and error messages", () => {
+    const ack = {
+      version: "1.0",
+      type: "command_ack",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000001000,
+      payload: {
+        action: "capture_photo",
+        acknowledgedAt: 1710000001000,
+        runtimeState: "BUSY",
+      },
+    };
+
+    const status = {
+      version: "1.0",
+      type: "command_status",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000002000,
+      payload: {
+        action: "capture_photo",
+        status: "image_uploaded",
+        statusAt: 1710000002000,
+        image: {
+          imageId: "img_abc123",
+          transferId: "trf_abc123",
+          uploadedAt: 1710000001800,
+          sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      },
+    };
+
+    const result = {
+      version: "1.0",
+      type: "command_result",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000003000,
+      payload: {
+        completedAt: 1710000003000,
+        result: {
+          action: "capture_photo",
+          imageId: "img_abc123",
+          transferId: "trf_abc123",
+          mimeType: "image/jpeg",
+          size: 123456,
+          width: 1024,
+          height: 768,
+          sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      },
+    };
+
+    const error = {
+      version: "1.0",
+      type: "command_error",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000003000,
+      payload: {
+        action: "capture_photo",
+        failedAt: 1710000003000,
+        error: {
+          code: "UPLOAD_FAILED",
+          message: "phone upload failed",
+          retryable: true,
+        },
+      },
+    };
+
+    expect(Value.Check(CommandAckMessageSchema, ack)).toBe(true);
+    expect(Value.Check(CommandStatusMessageSchema, status)).toBe(true);
+    expect(Value.Check(CommandResultMessageSchema, result)).toBe(true);
+    expect(Value.Check(CommandErrorMessageSchema, error)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, ack)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, status)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, result)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, error)).toBe(true);
+  });
+
+  test("accepts relay command_cancel message", () => {
+    const message = {
+      version: "1.0",
+      type: "command_cancel",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000003000,
+      payload: {
+        action: "capture_photo",
+        cancelledAt: 1710000003000,
+        reasonCode: "TIMEOUT",
+        reasonMessage: "relay cancelled after timeout",
+      },
+    };
+
+    expect(Value.Check(CommandCancelMessageSchema, message)).toBe(true);
+    expect(Value.Check(RelayDeviceOutboundMessageSchema, message)).toBe(true);
+  });
+
   test("rejects non-integer hello_ack limit and timing fields", () => {
     const message = {
       version: "1.0",
@@ -192,5 +334,70 @@ describe("relay ws schema", () => {
     };
 
     expect(Value.Check(RelayHelloAckMessageSchema, message)).toBe(false);
+  });
+
+  test("rejects image status messages without image metadata", () => {
+    const message = {
+      version: "1.0",
+      type: "command_status",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000002000,
+      payload: {
+        action: "capture_photo",
+        status: "image_uploaded",
+        statusAt: 1710000002000,
+      },
+    };
+
+    expect(Value.Check(CommandStatusMessageSchema, message)).toBe(false);
+  });
+
+  test("rejects command dispatch with non-jpeg content type", () => {
+    const message = {
+      version: "1.0",
+      type: "command",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      sessionId: "ses_abcdef",
+      timestamp: 1710000000000,
+      payload: {
+        action: "capture_photo",
+        timeoutMs: 90_000,
+        params: {},
+        image: {
+          imageId: "img_abc123",
+          transferId: "trf_abc123",
+          uploadToken: "123456789012345678901234",
+          contentType: "image/png",
+          expiresAt: 1710000090000,
+          maxSizeBytes: 10485760,
+        },
+      },
+    };
+
+    expect(Value.Check(CommandDispatchMessageSchema, message)).toBe(false);
+  });
+
+  test("rejects command_error with unsupported terminal code", () => {
+    const message = {
+      version: "1.0",
+      type: "command_error",
+      deviceId: "rokid_glasses_01",
+      requestId: "req_abc123",
+      timestamp: 1710000003000,
+      payload: {
+        action: "display_text",
+        failedAt: 1710000003000,
+        error: {
+          code: "DEVICE_BUSY",
+          message: "device busy",
+          retryable: true,
+        },
+      },
+    };
+
+    expect(Value.Check(CommandErrorMessageSchema, message)).toBe(false);
   });
 });

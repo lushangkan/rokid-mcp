@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Value } from "@sinclair/typebox/value";
 
-import { ErrorResponseSchema } from "./errors.js";
+import {
+  ErrorResponseSchema,
+  TerminalErrorCodeSchema,
+  TerminalErrorSchema,
+} from "./errors.js";
 
 describe("error schemas", () => {
   test("valid error response should pass", () => {
@@ -20,6 +24,21 @@ describe("error schemas", () => {
     };
 
     expect(Value.Check(ErrorResponseSchema, value)).toBe(true);
+  });
+
+  test("terminal errors accept frozen terminal codes", () => {
+    expect(Value.Check(TerminalErrorCodeSchema, "TIMEOUT")).toBe(true);
+    expect(
+      Value.Check(TerminalErrorSchema, {
+        code: "UPLOAD_FAILED",
+        message: "phone upload failed",
+        retryable: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("terminal errors reject unsupported codes", () => {
+    expect(Value.Check(TerminalErrorCodeSchema, "DEVICE_BUSY")).toBe(false);
   });
 
   test("invalid details shape should fail", () => {
