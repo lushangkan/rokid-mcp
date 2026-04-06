@@ -3,12 +3,19 @@ import {
   DEFAULT_MAX_IMAGE_UPLOAD_SIZE_BYTES,
   PROTOCOL_VERSION,
   RelayDeviceInboundMessageSchema,
+  RelayDeviceOutboundMessageSchema,
+  type CommandAckMessage,
+  type CommandErrorMessage,
+  type CommandResultMessage,
+  type CommandStatusMessage,
   type RelayDeviceInboundMessage,
+  type RelayDeviceOutboundMessage,
   type RelayHelloAckMessage,
 } from "@rokid-mcp/protocol";
 import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
+import { CommandService, CommandServiceError } from "../modules/command/command-service.ts";
 import type { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
 
 type DeviceWsAuthState = {
@@ -26,12 +33,39 @@ type DeviceSocketLike = {
 
 type DeviceWsHandlersOptions = {
   manager: DeviceSessionManager;
+  commandService: CommandService;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
 };
 
 const CLOSE_UNSUPPORTED_DATA = 1003;
 const CLOSE_POLICY_VIOLATION = 1008;
+const CLOSE_INTERNAL_ERROR = 1011;
+
+type AuthenticatedDeviceSocket = DeviceSocketLike & {
+  data: Required<Pick<DeviceWsAuthState, "deviceId" | "sessionId" | "socketId">> & DeviceWsAuthState;
+};
+
+type CommandInboundMessage = CommandAckMessage | CommandStatusMessage | CommandResultMessage | CommandErrorMessage;
+
+type ActiveSocketRecord = {
+  deviceId: string;
+  sessionId: string;
+  socketId: string;
+  socket: AuthenticatedDeviceSocket;
+};
+
+type DeviceWsHandlers = {
+  open: (ws: DeviceSocketLike) => void;
+  message: (ws: DeviceSocketLike, raw: string | Buffer) => void;
+  close: (ws: DeviceSocketLike) => void;
+};
+
+export type DeviceWsController = {
+  app: Elysia;
+  handlers: DeviceWsHandlers;
+  dispatchPendingCommand: (requestId: string) => boolean;
+};
 
 function createSocketId() {
   return `sock_${crypto.randomUUID().replace(/-/g, "_")}`;
@@ -86,12 +120,143 @@ function parseInboundMessage(raw: string | Buffer): ParsedInboundMessage {
 
 function hasAuthenticatedSession(
   ws: DeviceSocketLike,
-): ws is DeviceSocketLike & { data: Required<Pick<DeviceWsAuthState, "deviceId" | "sessionId" | "socketId">> & DeviceWsAuthState } {
+): ws is AuthenticatedDeviceSocket {
   return Boolean(ws.data.deviceId && ws.data.sessionId && ws.data.socketId);
 }
 
+function getOptionalSessionId(inbound: Exclude<RelayDeviceInboundMessage, { type: "hello" }>) {
+  return "sessionId" in inbound ? inbound.sessionId : undefined;
+}
+
+function isCommandInboundMessage(inbound: RelayDeviceInboundMessage): inbound is CommandInboundMessage {
+  return (
+    inbound.type === "command_ack" ||
+    inbound.type === "command_status" ||
+    inbound.type === "command_result" ||
+    inbound.type === "command_error"
+  );
+}
+
+function sendOutboundMessage(ws: DeviceSocketLike, message: RelayDeviceOutboundMessage): boolean {
+  if (!Value.Check(RelayDeviceOutboundMessageSchema, message)) {
+    ws.close(CLOSE_INTERNAL_ERROR);
+    return false;
+  }
+
+  try {
+    ws.send(message);
+    return true;
+  } catch {
+    ws.close(CLOSE_INTERNAL_ERROR);
+    return false;
+  }
+}
+
 export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
-  return {
+  return createDeviceWsController(options).handlers;
+}
+
+export function createDeviceWsController(options: DeviceWsHandlersOptions): DeviceWsController {
+  let activeSocket: ActiveSocketRecord | null = null;
+
+  function setActiveSocket(socket: AuthenticatedDeviceSocket) {
+    activeSocket = {
+      deviceId: socket.data.deviceId,
+      sessionId: socket.data.sessionId,
+      socketId: socket.data.socketId,
+      socket,
+    };
+  }
+
+  function clearActiveSocket(socket: AuthenticatedDeviceSocket) {
+    if (
+      activeSocket?.deviceId === socket.data.deviceId &&
+      activeSocket.sessionId === socket.data.sessionId &&
+      activeSocket.socketId === socket.data.socketId
+    ) {
+      activeSocket = null;
+    }
+  }
+
+  function resolveDispatchSocket(deviceId: string, sessionId: string): AuthenticatedDeviceSocket | null {
+    if (!activeSocket) {
+      return null;
+    }
+
+    if (
+      activeSocket.deviceId !== deviceId ||
+      activeSocket.sessionId !== sessionId ||
+      !options.manager.matchesCurrentSession(deviceId, sessionId, activeSocket.socketId)
+    ) {
+      return null;
+    }
+
+    return activeSocket.socket;
+  }
+
+  function dispatchPendingCommand(requestId: string): boolean {
+    const command = options.commandService.getCommand(requestId);
+    if (!command || command.status !== "CREATED") {
+      return false;
+    }
+
+    const device = options.manager.getCurrentDeviceStatus(command.deviceId).device;
+    if (device.sessionState !== "ONLINE" || !device.sessionId) {
+      return false;
+    }
+
+    const socket = resolveDispatchSocket(command.deviceId, device.sessionId);
+    if (!socket) {
+      return false;
+    }
+
+    try {
+      const dispatched = options.commandService.dispatchCommand({
+        requestId,
+        sessionId: device.sessionId,
+      });
+      return sendOutboundMessage(socket, dispatched.message);
+    } catch (error) {
+      if (error instanceof CommandServiceError) {
+        return false;
+      }
+
+      socket.close(CLOSE_INTERNAL_ERROR);
+      return false;
+    }
+  }
+
+  function dispatchActiveCommand(deviceId: string): boolean {
+    const activeCommand = options.commandService.getActiveCommand();
+    if (!activeCommand || activeCommand.deviceId !== deviceId || activeCommand.status !== "CREATED") {
+      return false;
+    }
+
+    return dispatchPendingCommand(activeCommand.requestId);
+  }
+
+  function handleInboundCommandMessage(ws: AuthenticatedDeviceSocket, inbound: CommandInboundMessage) {
+    try {
+      switch (inbound.type) {
+        case "command_ack":
+          options.commandService.handleCommandAck(inbound);
+          return;
+        case "command_status":
+          options.commandService.handleCommandStatus(inbound);
+          return;
+        case "command_result":
+          options.commandService.handleCommandResult(inbound);
+          return;
+        case "command_error":
+          options.commandService.handleCommandError(inbound);
+          return;
+      }
+    } catch (error) {
+      ws.close(error instanceof CommandServiceError ? CLOSE_POLICY_VIOLATION : CLOSE_INTERNAL_ERROR);
+    }
+  }
+
+  const handlers = {
     open(ws: DeviceSocketLike) {
       ws.data.socketId ??= createSocketId();
     },
@@ -123,7 +288,17 @@ export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
         ws.data.deviceId = inbound.deviceId;
         ws.data.sessionId = sessionId;
         ws.data.authToken = inbound.payload.authToken;
-        ws.send(createHelloAckMessage(inbound.deviceId, sessionId, options));
+        if (!hasAuthenticatedSession(ws)) {
+          ws.close(CLOSE_INTERNAL_ERROR);
+          return;
+        }
+
+        setActiveSocket(ws);
+        if (!sendOutboundMessage(ws, createHelloAckMessage(inbound.deviceId, sessionId, options))) {
+          return;
+        }
+
+        dispatchActiveCommand(inbound.deviceId);
         return;
       }
 
@@ -132,16 +307,18 @@ export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
         return;
       }
 
+      const inboundSessionId = getOptionalSessionId(inbound);
+
       if (
         inbound.deviceId !== ws.data.deviceId ||
-        inbound.sessionId !== ws.data.sessionId ||
-        !options.manager.matchesCurrentSession(inbound.deviceId, inbound.sessionId, ws.data.socketId)
+        (inboundSessionId !== undefined && inboundSessionId !== ws.data.sessionId) ||
+        !options.manager.matchesCurrentSession(ws.data.deviceId, ws.data.sessionId, ws.data.socketId)
       ) {
         ws.close(CLOSE_POLICY_VIOLATION);
         return;
       }
 
-      options.manager.markInboundSeen(inbound.deviceId, inbound.sessionId, ws.data.socketId);
+      options.manager.markInboundSeen(inbound.deviceId, ws.data.sessionId, ws.data.socketId);
 
       if (inbound.type === "heartbeat") {
         options.manager.markHeartbeat({
@@ -157,25 +334,31 @@ export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
         return;
       }
 
-      if (inbound.type !== "phone_state_update") {
+      if (inbound.type === "phone_state_update") {
+        const activeCommandRequestId = inbound.payload.activeCommandRequestId ?? null;
+
+        options.manager.applyPhoneStateUpdate({
+          deviceId: inbound.deviceId,
+          sessionId: ws.data.sessionId,
+          socketId: ws.data.socketId,
+          payload: {
+            setupState: inbound.payload.setupState,
+            runtimeState: inbound.payload.runtimeState,
+            uplinkState: inbound.payload.uplinkState,
+            activeCommandRequestId,
+            lastErrorCode: inbound.payload.lastErrorCode,
+            lastErrorMessage: inbound.payload.lastErrorMessage,
+          },
+        });
         return;
       }
 
-      const activeCommandRequestId = inbound.payload.activeCommandRequestId ?? null;
+      if (!isCommandInboundMessage(inbound)) {
+        ws.close(CLOSE_POLICY_VIOLATION);
+        return;
+      }
 
-      options.manager.applyPhoneStateUpdate({
-        deviceId: inbound.deviceId,
-        sessionId: inbound.sessionId,
-        socketId: ws.data.socketId,
-        payload: {
-          setupState: inbound.payload.setupState,
-          runtimeState: inbound.payload.runtimeState,
-          uplinkState: inbound.payload.uplinkState,
-          activeCommandRequestId,
-          lastErrorCode: inbound.payload.lastErrorCode,
-          lastErrorMessage: inbound.payload.lastErrorMessage,
-        },
-      });
+      handleInboundCommandMessage(ws, inbound);
     },
 
     close(ws: DeviceSocketLike) {
@@ -183,15 +366,12 @@ export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
         return;
       }
 
+      clearActiveSocket(ws);
       options.manager.closeCurrentSession(ws.data.deviceId, ws.data.sessionId, ws.data.socketId);
     },
   };
-}
 
-export function createDeviceWsRoutes(options: DeviceWsHandlersOptions) {
-  const handlers = buildDeviceWsHandlers(options);
   const app = new Elysia({ name: "ws-device-routes" });
-
   app.ws("/ws/device", {
     open(ws) {
       handlers.open(ws as unknown as DeviceSocketLike);
@@ -204,5 +384,13 @@ export function createDeviceWsRoutes(options: DeviceWsHandlersOptions) {
     },
   });
 
-  return app;
+  return {
+    app,
+    handlers,
+    dispatchPendingCommand,
+  };
+}
+
+export function createDeviceWsRoutes(options: DeviceWsHandlersOptions) {
+  return createDeviceWsController(options).app;
 }
