@@ -2,7 +2,13 @@ package cn.cutemc.rokidmcp.glasses.gateway
 
 import android.os.Build
 import cn.cutemc.rokidmcp.glasses.BuildConfig
+import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
+import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
+import cn.cutemc.rokidmcp.share.protocol.local.CommandError
+import cn.cutemc.rokidmcp.share.protocol.local.CommandFailure
+import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
 import cn.cutemc.rokidmcp.share.protocol.local.GlassesInfo
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
@@ -23,8 +29,11 @@ class GlassesLocalLinkSession(
     private val controller: GlassesAppController,
     private val clock: Clock,
     private val sessionScope: CoroutineScope,
+    private val capturePhotoExecutor: CapturePhotoExecutor? = null,
+    private val commandDispatcher: CommandDispatcher? = null,
 ) {
     private var eventJob: Job? = null
+    private var activeCommandJob: Job? = null
     private val glassesCapabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO)
 
     suspend fun start() {
@@ -49,6 +58,9 @@ class GlassesLocalLinkSession(
         try {
             transport.stop(reason)
         } finally {
+            commandDispatcher?.stop()
+            activeCommandJob?.cancelAndJoin()
+            activeCommandJob = null
             controller.markDisconnected()
             eventJob?.cancelAndJoin()
             eventJob = null
@@ -59,6 +71,7 @@ class GlassesLocalLinkSession(
         when (event.header.type) {
             LocalMessageType.HELLO -> handleHello(event.header)
             LocalMessageType.PING -> handlePing(event.header)
+            LocalMessageType.COMMAND -> handleCommand(event.header)
             else -> Unit
         }
     }
@@ -90,6 +103,95 @@ class GlassesLocalLinkSession(
                 type = LocalMessageType.PONG,
                 timestamp = clock.nowMs(),
                 payload = PongPayload(seq = ping.seq, nonce = ping.nonce),
+            ),
+        )
+    }
+
+    private suspend fun handleCommand(header: LocalFrameHeader<*>) {
+        commandDispatcher?.let {
+            it.handleCommand(header)
+            return
+        }
+
+        val requestId = header.requestId ?: return
+        when (val payload = header.payload) {
+            is CapturePhotoCommand -> dispatchCapturePhotoCommand(requestId, payload)
+            is DisplayTextCommand -> sendUnsupportedCommandError(
+                requestId = requestId,
+                action = CommandAction.DISPLAY_TEXT,
+                message = "display_text execution is not available in glasses-app yet",
+            )
+            else -> Unit
+        }
+    }
+
+    private suspend fun dispatchCapturePhotoCommand(
+        requestId: String,
+        payload: CapturePhotoCommand,
+    ) {
+        if (activeCommandJob?.isActive == true) {
+            sendBusyCommandError(requestId, CommandAction.CAPTURE_PHOTO)
+            return
+        }
+
+        val executor = capturePhotoExecutor ?: run {
+            sendUnsupportedCommandError(
+                requestId = requestId,
+                action = CommandAction.CAPTURE_PHOTO,
+                message = "capture_photo execution is not configured",
+            )
+            return
+        }
+
+        activeCommandJob = sessionScope.launch {
+            try {
+                executor.execute(requestId = requestId, command = payload)
+            } catch (error: Exception) {
+                controller.markFailure(error.message ?: "capture photo execution failed")
+            } finally {
+                activeCommandJob = null
+            }
+        }
+    }
+
+    private suspend fun sendBusyCommandError(requestId: String, action: CommandAction) {
+        transport.send(
+            LocalFrameHeader(
+                type = LocalMessageType.COMMAND_ERROR,
+                requestId = requestId,
+                timestamp = clock.nowMs(),
+                payload = CommandError(
+                    action = action,
+                    failedAt = clock.nowMs(),
+                    error = CommandFailure(
+                        code = LocalProtocolErrorCodes.COMMAND_BUSY,
+                        message = "another glasses command is already running",
+                        retryable = true,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    private suspend fun sendUnsupportedCommandError(
+        requestId: String,
+        action: CommandAction,
+        message: String,
+    ) {
+        transport.send(
+            LocalFrameHeader(
+                type = LocalMessageType.COMMAND_ERROR,
+                requestId = requestId,
+                timestamp = clock.nowMs(),
+                payload = CommandError(
+                    action = action,
+                    failedAt = clock.nowMs(),
+                    error = CommandFailure(
+                        code = LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL,
+                        message = message,
+                        retryable = false,
+                    ),
+                ),
             ),
         )
     }

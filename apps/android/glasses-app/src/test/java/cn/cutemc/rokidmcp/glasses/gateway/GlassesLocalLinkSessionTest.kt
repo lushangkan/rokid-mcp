@@ -2,7 +2,19 @@ package cn.cutemc.rokidmcp.glasses.gateway
 
 import android.os.Build
 import cn.cutemc.rokidmcp.glasses.BuildConfig
+import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
+import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
+import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
+import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
+import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams
+import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoResult
+import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
 import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
@@ -223,6 +235,75 @@ class GlassesLocalLinkSessionTest {
         runCurrent()
 
         assertEquals(GlassesRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
+        assertEquals(null, runtimeStore.snapshot.value.lastErrorMessage)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `capture photo command runs executor and returns result after chunk transfer`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val clock = FakeClock(1_717_172_450L)
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = clock,
+            sessionScope = backgroundScope,
+            capturePhotoExecutor = CapturePhotoExecutor(
+                cameraAdapter = object : CameraAdapter {
+                    override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
+                        CameraCapture(
+                            bytes = "jpeg-session".encodeToByteArray(),
+                            width = 800,
+                            height = 600,
+                        )
+                },
+                checksumCalculator = ChecksumCalculator(),
+                imageChunkSender = ImageChunkSender(
+                    codec = DefaultLocalFrameCodec(),
+                    clock = clock,
+                    frameSender = EncodedLocalFrameSender { frameBytes ->
+                        val decoded = DefaultLocalFrameCodec().decode(frameBytes)
+                        transport.send(decoded.header, decoded.body)
+                    },
+                    chunkSizeBytes = 4,
+                ),
+                clock = clock,
+                frameSender = GlassesFrameSender(transport::send),
+            ),
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(
+            GlassesTransportEvent.FrameReceived(
+                LocalFrameHeader(
+                    type = LocalMessageType.COMMAND,
+                    requestId = "req_capture_1",
+                    timestamp = 1_717_172_451L,
+                    payload = CapturePhotoCommand(
+                        timeoutMs = 90_000L,
+                        params = CapturePhotoCommandParams(),
+                        transfer = CaptureTransfer(
+                            transferId = "trf_capture_1",
+                            maxBytes = 4_096L,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+        runCurrent()
+
+        assertEquals(LocalMessageType.COMMAND_ACK, transport.sentFrames[0].header.type)
+        assertEquals(LocalMessageType.CHUNK_START, transport.sentFrames[3].header.type)
+        assertEquals(LocalMessageType.COMMAND_RESULT, transport.sentFrames.last().header.type)
+        val result = transport.sentFrames.last().header.payload as CapturePhotoResult
+        assertEquals(800, result.result.width)
+        assertEquals(600, result.result.height)
         assertEquals(null, runtimeStore.snapshot.value.lastErrorMessage)
 
         session.stop("test complete")
