@@ -2,15 +2,15 @@ package cn.cutemc.rokidmcp.glasses.gateway
 
 import android.os.Build
 import cn.cutemc.rokidmcp.glasses.BuildConfig
-import cn.cutemc.rokidmcp.share.protocol.HelloPayload
-import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
-import cn.cutemc.rokidmcp.share.protocol.LinkRole
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
-import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
-import cn.cutemc.rokidmcp.share.protocol.LocalRuntimeState
-import cn.cutemc.rokidmcp.share.protocol.PingPayload
-import cn.cutemc.rokidmcp.share.protocol.PongPayload
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
+import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
+import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
+import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -43,7 +43,7 @@ class GlassesLocalLinkSessionTest {
                         role = LinkRole.PHONE,
                         deviceId = "phone-device",
                         appVersion = "1.0.0",
-                        supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+                        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
                     ),
                 ),
             ),
@@ -54,7 +54,7 @@ class GlassesLocalLinkSessionTest {
         assertEquals(LocalMessageType.HELLO_ACK, helloAck.type)
         assertTrue((helloAck.payload as HelloAckPayload).accepted)
         assertEquals(
-            listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
+            listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
             (helloAck.payload as HelloAckPayload).capabilities,
         )
         assertEquals(Build.MODEL, (helloAck.payload as HelloAckPayload).glassesInfo?.model)
