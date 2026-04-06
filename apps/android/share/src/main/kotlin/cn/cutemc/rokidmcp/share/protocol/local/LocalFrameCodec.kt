@@ -1,10 +1,13 @@
-package cn.cutemc.rokidmcp.share.protocol
+package cn.cutemc.rokidmcp.share.protocol.local
 
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolConstants
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonContentPolymorphicSerializer
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -22,12 +25,16 @@ interface LocalFrameCodec {
 
 class ProtocolCodecException(message: String) : IllegalArgumentException(message)
 
-class DefaultLocalFrameCodec(
-    private val json: Json = Json {
+object LocalProtocolJson {
+    val default: Json = Json {
         encodeDefaults = true
         explicitNulls = false
         ignoreUnknownKeys = false
-    },
+    }
+}
+
+class DefaultLocalFrameCodec(
+    private val json: Json = LocalProtocolJson.default,
 ) : LocalFrameCodec {
     override fun encode(header: LocalFrameHeader<*>, body: ByteArray?): ByteArray {
         validateHeaderForEncode(header, body)
@@ -123,23 +130,53 @@ class DefaultLocalFrameCodec(
         }
 
         when (val payload = header.payload) {
-            is CapturePhotoCommandPayload -> {
+            is HelloAckPayload -> {
+                if (payload.accepted && payload.error != null) {
+                    throw ProtocolCodecException("Accepted hello_ack must not include an error")
+                }
+                if (!payload.accepted && payload.error == null) {
+                    throw ProtocolCodecException("Rejected hello_ack must include an error")
+                }
+            }
+            is CapturePhotoCommand -> {
                 if (payload.transfer.maxBytes > LocalProtocolConstants.MAX_IMAGE_SIZE_BYTES) {
                     throw ProtocolCodecException("Capture photo maxBytes exceeds protocol limit")
                 }
+                if (payload.transfer.mediaType != LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG) {
+                    throw ProtocolCodecException("Capture photo only supports JPEG transfers")
+                }
             }
-            is ChunkStartPayload -> {
+            is CapturePhotoResult -> {
+                if (payload.result.mediaType != LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG) {
+                    throw ProtocolCodecException("Capture photo result only supports JPEG")
+                }
+            }
+            is ChunkStart -> {
+                if (payload.action != CommandAction.CAPTURE_PHOTO) {
+                    throw ProtocolCodecException("chunk_start only supports capture_photo")
+                }
+                if (payload.mediaType != LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG) {
+                    throw ProtocolCodecException("chunk_start only supports JPEG")
+                }
                 if (payload.totalSize <= 0 || payload.totalSize > LocalProtocolConstants.MAX_IMAGE_SIZE_BYTES) {
                     throw ProtocolCodecException("Chunk start totalSize is out of range")
                 }
             }
-            is ChunkDataPayload -> {
+            is ChunkData -> {
+                if (payload.action != CommandAction.CAPTURE_PHOTO) {
+                    throw ProtocolCodecException("chunk_data only supports capture_photo")
+                }
                 val frameBody = body ?: throw ProtocolCodecException("chunk_data requires a binary body")
                 if (payload.size != frameBody.size) {
                     throw ProtocolCodecException("chunk_data size does not match binary body length")
                 }
                 if (payload.chunkChecksum != LocalProtocolChecksums.crc32(frameBody)) {
                     throw ProtocolCodecException("chunk_data checksum does not match binary body")
+                }
+            }
+            is ChunkEnd -> {
+                if (payload.action != CommandAction.CAPTURE_PHOTO) {
+                    throw ProtocolCodecException("chunk_end only supports capture_photo")
                 }
             }
             else -> {
@@ -170,13 +207,13 @@ class DefaultLocalFrameCodec(
         LocalMessageType.PING -> json.decodeFromJsonElement(PingPayload.serializer(), payload)
         LocalMessageType.PONG -> json.decodeFromJsonElement(PongPayload.serializer(), payload)
         LocalMessageType.COMMAND -> decodeCommandPayload(payload)
-        LocalMessageType.COMMAND_ACK -> json.decodeFromJsonElement(CommandAckPayload.serializer(), payload)
-        LocalMessageType.COMMAND_STATUS -> json.decodeFromJsonElement(CommandStatusPayload.serializer(), payload)
-        LocalMessageType.COMMAND_RESULT -> decodeCommandResultPayload(payload)
-        LocalMessageType.COMMAND_ERROR -> json.decodeFromJsonElement(CommandErrorPayload.serializer(), payload)
-        LocalMessageType.CHUNK_START -> json.decodeFromJsonElement(ChunkStartPayload.serializer(), payload)
-        LocalMessageType.CHUNK_DATA -> json.decodeFromJsonElement(ChunkDataPayload.serializer(), payload)
-        LocalMessageType.CHUNK_END -> json.decodeFromJsonElement(ChunkEndPayload.serializer(), payload)
+        LocalMessageType.COMMAND_ACK -> json.decodeFromJsonElement(CommandAck.serializer(), payload)
+        LocalMessageType.COMMAND_STATUS -> json.decodeFromJsonElement(LocalCommandStatusSerializer, payload)
+        LocalMessageType.COMMAND_RESULT -> json.decodeFromJsonElement(LocalCommandResultSerializer, payload)
+        LocalMessageType.COMMAND_ERROR -> json.decodeFromJsonElement(CommandError.serializer(), payload)
+        LocalMessageType.CHUNK_START -> json.decodeFromJsonElement(ChunkStart.serializer(), payload)
+        LocalMessageType.CHUNK_DATA -> json.decodeFromJsonElement(ChunkData.serializer(), payload)
+        LocalMessageType.CHUNK_END -> json.decodeFromJsonElement(ChunkEnd.serializer(), payload)
     }
 
     private fun serializerForEncode(type: LocalMessageType, payload: Any): KSerializer<*> = when (type) {
@@ -185,38 +222,33 @@ class DefaultLocalFrameCodec(
         LocalMessageType.PING -> requirePayload<PingPayload>(type, payload, PingPayload.serializer())
         LocalMessageType.PONG -> requirePayload<PongPayload>(type, payload, PongPayload.serializer())
         LocalMessageType.COMMAND -> when (payload) {
-            is DisplayTextCommandPayload -> DisplayTextCommandPayload.serializer()
-            is CapturePhotoCommandPayload -> CapturePhotoCommandPayload.serializer()
+            is DisplayTextCommand -> DisplayTextCommand.serializer()
+            is CapturePhotoCommand -> CapturePhotoCommand.serializer()
             else -> throw ProtocolCodecException("Unsupported command payload: ${payload::class.simpleName}")
         }
-        LocalMessageType.COMMAND_ACK -> requirePayload<CommandAckPayload>(type, payload, CommandAckPayload.serializer())
-        LocalMessageType.COMMAND_STATUS -> requirePayload<CommandStatusPayload>(type, payload, CommandStatusPayload.serializer())
+        LocalMessageType.COMMAND_ACK -> requirePayload<CommandAck>(type, payload, CommandAck.serializer())
+        LocalMessageType.COMMAND_STATUS -> when (payload) {
+            is ExecutingCommandStatus -> ExecutingCommandStatus.serializer()
+            is DisplayingCommandStatus -> DisplayingCommandStatus.serializer()
+            is CapturingCommandStatus -> CapturingCommandStatus.serializer()
+            else -> throw ProtocolCodecException("Unsupported command status payload: ${payload::class.simpleName}")
+        }
         LocalMessageType.COMMAND_RESULT -> when (payload) {
-            is DisplayTextCommandResultPayload -> DisplayTextCommandResultPayload.serializer()
-            is CapturePhotoCommandResultPayload -> CapturePhotoCommandResultPayload.serializer()
+            is DisplayTextResult -> DisplayTextResult.serializer()
+            is CapturePhotoResult -> CapturePhotoResult.serializer()
             else -> throw ProtocolCodecException("Unsupported command result payload: ${payload::class.simpleName}")
         }
-        LocalMessageType.COMMAND_ERROR -> requirePayload<CommandErrorPayload>(type, payload, CommandErrorPayload.serializer())
-        LocalMessageType.CHUNK_START -> requirePayload<ChunkStartPayload>(type, payload, ChunkStartPayload.serializer())
-        LocalMessageType.CHUNK_DATA -> requirePayload<ChunkDataPayload>(type, payload, ChunkDataPayload.serializer())
-        LocalMessageType.CHUNK_END -> requirePayload<ChunkEndPayload>(type, payload, ChunkEndPayload.serializer())
+        LocalMessageType.COMMAND_ERROR -> requirePayload<CommandError>(type, payload, CommandError.serializer())
+        LocalMessageType.CHUNK_START -> requirePayload<ChunkStart>(type, payload, ChunkStart.serializer())
+        LocalMessageType.CHUNK_DATA -> requirePayload<ChunkData>(type, payload, ChunkData.serializer())
+        LocalMessageType.CHUNK_END -> requirePayload<ChunkEnd>(type, payload, ChunkEnd.serializer())
     }
 
     private fun decodeCommandPayload(payload: JsonElement): Any = when (payload.actionValue()) {
-        LocalAction.DISPLAY_TEXT.serialName -> json.decodeFromJsonElement(DisplayTextCommandPayload.serializer(), payload)
-        LocalAction.CAPTURE_PHOTO.serialName -> json.decodeFromJsonElement(CapturePhotoCommandPayload.serializer(), payload)
+        CommandAction.DISPLAY_TEXT.serialName -> json.decodeFromJsonElement(DisplayTextCommand.serializer(), payload)
+        CommandAction.CAPTURE_PHOTO.serialName -> json.decodeFromJsonElement(CapturePhotoCommand.serializer(), payload)
         else -> throw ProtocolCodecException("Unknown command action in payload")
     }
-
-    private fun decodeCommandResultPayload(payload: JsonElement): Any = when (payload.actionValue()) {
-        LocalAction.DISPLAY_TEXT.serialName -> json.decodeFromJsonElement(DisplayTextCommandResultPayload.serializer(), payload)
-        LocalAction.CAPTURE_PHOTO.serialName -> json.decodeFromJsonElement(CapturePhotoCommandResultPayload.serializer(), payload)
-        else -> throw ProtocolCodecException("Unknown command result action in payload")
-    }
-
-    private fun JsonElement.actionValue(): String =
-        jsonObject["action"]?.jsonPrimitive?.content
-            ?: throw ProtocolCodecException("Payload is missing action")
 
     private inline fun <reified T : Any> requirePayload(
         type: LocalMessageType,
@@ -227,6 +259,23 @@ class DefaultLocalFrameCodec(
             throw ProtocolCodecException("${type.name} received unexpected payload ${payload::class.simpleName}")
         }
         return serializer
+    }
+}
+
+object LocalCommandStatusSerializer : JsonContentPolymorphicSerializer<LocalCommandStatus>(LocalCommandStatus::class) {
+    override fun selectDeserializer(element: JsonElement) = when (element.statusValue()) {
+        LocalCommandProgress.EXECUTING.serialName -> ExecutingCommandStatus.serializer()
+        LocalCommandProgress.DISPLAYING.serialName -> DisplayingCommandStatus.serializer()
+        LocalCommandProgress.CAPTURING.serialName -> CapturingCommandStatus.serializer()
+        else -> throw IllegalArgumentException("Unknown local command status")
+    }
+}
+
+object LocalCommandResultSerializer : JsonContentPolymorphicSerializer<LocalCommandResult>(LocalCommandResult::class) {
+    override fun selectDeserializer(element: JsonElement) = when (element.actionValue()) {
+        CommandAction.DISPLAY_TEXT.serialName -> DisplayTextResult.serializer()
+        CommandAction.CAPTURE_PHOTO.serialName -> CapturePhotoResult.serializer()
+        else -> throw IllegalArgumentException("Unknown local command result")
     }
 }
 
@@ -256,8 +305,21 @@ private fun LocalMessageType.requiresRequestId(): Boolean = this in setOf(
 
 private fun LocalMessageType.requiresTransferId(): Boolean = this in chunkTypes
 
-private val LocalAction.serialName: String
+private fun JsonElement.actionValue(): String = jsonObject["action"]?.jsonPrimitive?.content
+    ?: throw ProtocolCodecException("Payload is missing action")
+
+private fun JsonElement.statusValue(): String = jsonObject["status"]?.jsonPrimitive?.content
+    ?: throw ProtocolCodecException("Payload is missing status")
+
+private val CommandAction.serialName: String
     get() = when (this) {
-        LocalAction.DISPLAY_TEXT -> "display_text"
-        LocalAction.CAPTURE_PHOTO -> "capture_photo"
+        CommandAction.DISPLAY_TEXT -> "display_text"
+        CommandAction.CAPTURE_PHOTO -> "capture_photo"
+    }
+
+private val LocalCommandProgress.serialName: String
+    get() = when (this) {
+        LocalCommandProgress.EXECUTING -> "executing"
+        LocalCommandProgress.DISPLAYING -> "displaying"
+        LocalCommandProgress.CAPTURING -> "capturing"
     }

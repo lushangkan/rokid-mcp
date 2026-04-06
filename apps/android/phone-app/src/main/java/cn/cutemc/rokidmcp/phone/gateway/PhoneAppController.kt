@@ -1,8 +1,9 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
-import cn.cutemc.rokidmcp.share.protocol.DefaultLocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.PhoneGatewayErrorCodes
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,7 +48,7 @@ class PhoneAppController(
     },
     private val clock: Clock = SystemClock,
     private val controllerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    private val supportedActions: List<LocalAction> = listOf(LocalAction.DISPLAY_TEXT),
+    private val supportedActions: List<CommandAction> = listOf(CommandAction.DISPLAY_TEXT),
     private val createRelaySessionClient: (PhoneGatewayConfig) -> RelaySessionClient = { config ->
         RelaySessionClient(
             runtimeStore = runtimeStore,
@@ -94,7 +95,7 @@ class PhoneAppController(
             runtimeStore.replace(
                 runtimeStore.snapshot.value.copy(
                     runtimeState = PhoneRuntimeState.ERROR,
-                    lastErrorCode = "PHONE_CONFIG_INCOMPLETE",
+                    lastErrorCode = PhoneGatewayErrorCodes.PHONE_CONFIG_INCOMPLETE,
                     lastErrorMessage = "authToken or relayBaseUrl is missing",
                 ),
             )
@@ -111,7 +112,7 @@ class PhoneAppController(
             createTransport()
         } catch (error: Throwable) {
             markStartupFailure(
-                code = "BLUETOOTH_TRANSPORT_UNAVAILABLE",
+                code = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_UNAVAILABLE,
                 message = error.message ?: "bluetooth transport unavailable",
             )
             return
@@ -135,7 +136,7 @@ class PhoneAppController(
                         runtimeStore.replace(
                             runtimeStore.snapshot.value.copy(
                                 runtimeState = PhoneRuntimeState.ERROR,
-                                lastErrorCode = "BLUETOOTH_TRANSPORT_ERROR",
+                                lastErrorCode = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_ERROR,
                                 lastErrorMessage = event.cause.message ?: "transport failure",
                             ),
                         )
@@ -174,7 +175,7 @@ class PhoneAppController(
             createdSession.start(targetDeviceAddress)
         } catch (error: Throwable) {
             markStartupFailure(
-                code = "BLUETOOTH_TRANSPORT_UNAVAILABLE",
+                code = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_UNAVAILABLE,
                 message = error.message ?: "bluetooth transport unavailable",
             )
             terminateActiveSession("startup failed")
@@ -299,7 +300,7 @@ class PhoneAppController(
                 val next = current.copy(
                     uplinkState = PhoneUplinkState.ERROR,
                     runtimeState = projectRuntimeState(PhoneUplinkState.ERROR, current.runtimeState),
-                    lastErrorCode = "RELAY_SESSION_ERROR",
+                    lastErrorCode = PhoneGatewayErrorCodes.RELAY_SESSION_ERROR,
                     lastErrorMessage = event.message,
                 )
                 runtimeStore.replace(next)

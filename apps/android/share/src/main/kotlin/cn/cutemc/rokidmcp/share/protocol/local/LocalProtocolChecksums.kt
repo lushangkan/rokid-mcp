@@ -1,4 +1,4 @@
-package cn.cutemc.rokidmcp.share.protocol
+package cn.cutemc.rokidmcp.share.protocol.local
 
 import java.io.File
 import java.security.MessageDigest
