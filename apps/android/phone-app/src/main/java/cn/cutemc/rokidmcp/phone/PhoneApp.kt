@@ -10,24 +10,17 @@ import cn.cutemc.rokidmcp.phone.logging.PhoneLoggerBootstrap
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 
 class PhoneApp : Application() {
+    val gatewayAppVersion: String = BuildConfig.VERSION_NAME
     val uiLogStore = PhoneUiLogStore()
     val logStore = PhoneLogStore(uiLogStore)
     val localConfigStore: PhoneLocalConfigStore by lazy {
         PhoneLocalConfigStore(getSharedPreferences("phone_local_config", MODE_PRIVATE))
     }
     val appController: PhoneAppController by lazy {
-        PhoneAppController(
-            runtimeStore = PhoneRuntimeStore(),
+        createActivePhoneAppController(
+            localConfigStore = localConfigStore,
             logStore = logStore,
-            loadConfig = {
-                val local = localConfigStore.load()
-                PhoneGatewayConfig(
-                    deviceId = local.deviceId,
-                    authToken = local.authToken,
-                    relayBaseUrl = local.relayBaseUrl,
-                    appVersion = BuildConfig.VERSION_NAME,
-                )
-            },
+            gatewayAppVersion = gatewayAppVersion,
         )
     }
 
@@ -36,3 +29,21 @@ class PhoneApp : Application() {
         PhoneLoggerBootstrap.initialize(uiLogStore)
     }
 }
+
+internal fun createActivePhoneAppController(
+    localConfigStore: PhoneLocalConfigStore,
+    logStore: PhoneLogStore,
+    gatewayAppVersion: String,
+): PhoneAppController = PhoneAppController(
+    runtimeStore = PhoneRuntimeStore(),
+    logStore = logStore,
+    loadConfig = {
+        val local = localConfigStore.load()
+        PhoneGatewayConfig(
+            deviceId = local.deviceId,
+            authToken = local.authToken,
+            relayBaseUrl = local.relayBaseUrl,
+            appVersion = gatewayAppVersion,
+        )
+    },
+)

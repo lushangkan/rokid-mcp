@@ -45,6 +45,11 @@ sealed interface PhoneLocalSessionEvent {
         val code: String,
         val message: String,
     ) : PhoneLocalSessionEvent
+
+    data class FrameReceived(
+        val header: LocalFrameHeader<*>,
+        val body: ByteArray?,
+    ) : PhoneLocalSessionEvent
 }
 
 open class PhoneLocalLinkSession(
@@ -105,6 +110,11 @@ open class PhoneLocalLinkSession(
         eventJob = null
     }
 
+    open suspend fun sendFrame(header: LocalFrameHeader<*>, body: ByteArray? = null) {
+        check(sessionReady) { "local session is not ready" }
+        transport.send(codec.encode(header, body))
+    }
+
     private suspend fun handleStateChanged(state: PhoneTransportState) {
         if (state != PhoneTransportState.CONNECTED) {
             return
@@ -136,6 +146,14 @@ open class PhoneLocalLinkSession(
         when (frame.header.type) {
             LocalMessageType.HELLO_ACK -> handleHelloAck(frame.header.payload as? HelloAckPayload ?: return)
             LocalMessageType.PONG -> handlePong(frame.header.payload as? PongPayload ?: return)
+            LocalMessageType.COMMAND_ACK,
+            LocalMessageType.COMMAND_STATUS,
+            LocalMessageType.COMMAND_RESULT,
+            LocalMessageType.COMMAND_ERROR,
+            LocalMessageType.CHUNK_START,
+            LocalMessageType.CHUNK_DATA,
+            LocalMessageType.CHUNK_END,
+            -> internalEvents.emit(PhoneLocalSessionEvent.FrameReceived(frame.header, frame.body))
             else -> Unit
         }
     }

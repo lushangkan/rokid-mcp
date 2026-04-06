@@ -2,6 +2,7 @@ package cn.cutemc.rokidmcp.phone.gateway
 
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.constants.PhoneGatewayErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import kotlinx.coroutines.CoroutineScope
@@ -48,7 +49,7 @@ class PhoneAppController(
     },
     private val clock: Clock = SystemClock,
     private val controllerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    private val supportedActions: List<CommandAction> = listOf(CommandAction.DISPLAY_TEXT),
+    private val supportedActions: List<CommandAction> = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
     private val createRelaySessionClient: (PhoneGatewayConfig) -> RelaySessionClient = { config ->
         RelaySessionClient(
             runtimeStore = runtimeStore,
@@ -70,6 +71,7 @@ class PhoneAppController(
     private var transportEventsJob: Job? = null
     private var sessionEventsJob: Job? = null
     private var relayEventsJob: Job? = null
+    private var relayCommandBridge: RelayCommandBridge? = null
     private var lastReportedSnapshot: PhoneRuntimeSnapshot? = null
     private var currentTransportState: PhoneTransportState = PhoneTransportState.IDLE
     private var isLocalSessionReady: Boolean = false
@@ -124,6 +126,20 @@ class PhoneAppController(
         )
         val createdSession = createLocalSession(createdTransport, helloConfig, clock, controllerScope)
         val createdRelaySessionClient = createRelaySessionClient(config)
+        val createdRelayCommandBridge = RelayCommandBridge(
+            relayBaseUrl = requireNotNull(config.relayBaseUrl),
+            deviceId = config.deviceId,
+            clock = clock,
+            relaySessionClient = createdRelaySessionClient,
+            activeCommandRegistry = ActiveCommandRegistry(),
+            localCommandForwarder = LocalCommandForwarder(
+                clock = clock,
+                sender = LocalFrameSender { header, body -> createdSession.sendFrame(header, body) },
+            ),
+            incomingImageAssembler = IncomingImageAssembler(),
+            relayImageUploader = RelayImageUploader(),
+            runtimeUpdater = ::applyBridgeCommandState,
+        )
 
         transportEventsJob?.cancel()
         transportEventsJob = controllerScope.launch {
@@ -132,6 +148,10 @@ class PhoneAppController(
                     is PhoneTransportEvent.StateChanged -> applyTransportState(event.state)
                     is PhoneTransportEvent.Failure -> {
                         _runState.value = GatewayRunState.ERROR
+                        relayCommandBridge?.failActiveCommand(
+                            code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
+                            message = event.cause.message ?: "transport failure",
+                        )
                         terminateActiveSession("transport ended")
                         runtimeStore.replace(
                             runtimeStore.snapshot.value.copy(
@@ -143,6 +163,10 @@ class PhoneAppController(
                     }
                     is PhoneTransportEvent.ConnectionClosed -> {
                         _runState.value = GatewayRunState.STOPPED
+                        relayCommandBridge?.failActiveCommand(
+                            code = LocalProtocolErrorCodes.BLUETOOTH_DISCONNECTED,
+                            message = event.reason ?: "transport disconnected",
+                        )
                         terminateActiveSession("transport ended")
                         runtimeStore.replace(
                             runtimeStore.snapshot.value.copy(
@@ -170,6 +194,7 @@ class PhoneAppController(
         transport = createdTransport
         localSession = createdSession
         relaySessionClient = createdRelaySessionClient
+        relayCommandBridge = createdRelayCommandBridge
         try {
             createdRelaySessionClient.connect()
             createdSession.start(targetDeviceAddress)
@@ -250,6 +275,7 @@ class PhoneAppController(
             is PhoneLocalSessionEvent.HelloRejected -> {
                 _runState.value = GatewayRunState.STOPPED
                 isLocalSessionReady = false
+                relayCommandBridge?.failActiveCommand(event.code, event.message)
                 stopActiveSession("session failed")
                 val next = runtimeStore.snapshot.value.copy(
                         runtimeState = PhoneRuntimeState.DISCONNECTED,
@@ -271,6 +297,7 @@ class PhoneAppController(
             is PhoneLocalSessionEvent.SessionFailed -> {
                 _runState.value = GatewayRunState.STOPPED
                 isLocalSessionReady = false
+                relayCommandBridge?.failActiveCommand(event.code, event.message)
                 stopActiveSession("session failed")
                 val next = runtimeStore.snapshot.value.copy(
                         runtimeState = PhoneRuntimeState.DISCONNECTED,
@@ -280,12 +307,19 @@ class PhoneAppController(
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
             }
+
+            is PhoneLocalSessionEvent.FrameReceived -> {
+                relayCommandBridge?.handleLocalSessionEvent(event)
+            }
         }
     }
 
     suspend fun handleRelaySessionEvent(event: RelaySessionEvent) {
         when (event) {
             RelaySessionEvent.Connected -> Unit
+            is RelaySessionEvent.CommandCancelled,
+            is RelaySessionEvent.CommandDispatched,
+            -> relayCommandBridge?.handleRelaySessionEvent(event)
             is RelaySessionEvent.UplinkStateChanged -> {
                 val current = runtimeStore.snapshot.value
                 val next = current.copy(
@@ -335,6 +369,7 @@ class PhoneAppController(
         transport = null
         localSession = null
         relaySessionClient = null
+        relayCommandBridge = null
         currentTransportState = PhoneTransportState.IDLE
         isLocalSessionReady = false
     }
@@ -396,5 +431,26 @@ class PhoneAppController(
             relayClient.sendPhoneStateUpdate(next)
             lastReportedSnapshot = next
         }
+    }
+
+    private suspend fun applyBridgeCommandState(
+        activeCommandRequestId: String?,
+        errorCode: String?,
+        errorMessage: String?,
+    ) {
+        val current = runtimeStore.snapshot.value
+        val nextRuntime = if (activeCommandRequestId != null) {
+            PhoneRuntimeState.BUSY
+        } else {
+            projectRuntimeState(current.uplinkState, PhoneRuntimeState.CONNECTING)
+        }
+        val next = current.copy(
+            runtimeState = nextRuntime,
+            activeCommandRequestId = activeCommandRequestId,
+            lastErrorCode = errorCode,
+            lastErrorMessage = errorMessage,
+        )
+        runtimeStore.replace(next)
+        reportIfNeeded(next)
     }
 }
