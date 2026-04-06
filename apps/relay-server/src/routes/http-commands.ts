@@ -21,6 +21,7 @@ import type { DeviceSessionManager } from "../modules/device/device-session-mana
 type HttpCommandsRoutesOptions = {
   manager: DeviceSessionManager;
   commandService: CommandService;
+  dispatchPendingCommand?: (requestId: string) => boolean;
 };
 
 type RouteSuccess<T> = {
@@ -51,8 +52,10 @@ export function createHttpCommandsRoutes(options: HttpCommandsRoutesOptions) {
           request: parsedBody.value,
           sessionId,
         });
+        options.dispatchPendingCommand?.(submitted.command.requestId);
+        const latestCommand = options.commandService.getCommand(submitted.command.requestId) ?? submitted.command;
 
-        const response = buildSubmitCommandResponse(submitted.command, request.url);
+        const response = buildSubmitCommandResponse(latestCommand, request.url);
         set.status = 202;
         return response;
       } catch (error) {

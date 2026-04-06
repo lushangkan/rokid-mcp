@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 
 import { PROTOCOL_VERSION } from "@rokid-mcp/protocol";
 
+import { CommandService } from "../modules/command/command-service.ts";
+import { DefaultCommandIdGenerator } from "../modules/command/id-generator.ts";
 import { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
-import { buildDeviceWsHandlers } from "./ws-device.ts";
+import { createHttpCommandsRoutes } from "./http-commands.ts";
+import { buildDeviceWsHandlers, createDeviceWsController } from "./ws-device.ts";
 
 type FakeSocket = {
   data: { socketId: string; deviceId?: string; sessionId?: string; authToken?: string };
@@ -17,6 +20,20 @@ function createManager() {
   return new DeviceSessionManager({
     heartbeatTimeoutMs: 50,
     cleanupIntervalMs: 10,
+  });
+}
+
+function createDeterministicIdGenerator() {
+  let value = 0;
+  return new DefaultCommandIdGenerator({
+    randomUUID: () => `00000000-0000-4000-8000-${String(++value).padStart(12, "0")}`,
+  });
+}
+
+function createService() {
+  return new CommandService({
+    clock: () => 1_700_000_000_000,
+    idGenerator: createDeterministicIdGenerator(),
   });
 }
 
@@ -41,8 +58,35 @@ function createSocket(): FakeSocket {
 function createHandlers(manager = createManager()) {
   return buildDeviceWsHandlers({
     manager,
+    commandService: createService(),
     heartbeatIntervalMs: 5000,
     heartbeatTimeoutMs: 15000,
+  });
+}
+
+function createController(manager = createManager(), service = createService()) {
+  const controller = createDeviceWsController({
+    manager,
+    commandService: service,
+    heartbeatIntervalMs: 5000,
+    heartbeatTimeoutMs: 15000,
+  });
+
+  return {
+    manager,
+    service,
+    controller,
+    handlers: controller.handlers,
+  };
+}
+
+function createSubmitRequest(body: unknown) {
+  return new Request("http://localhost/api/v1/commands", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
 }
 
@@ -109,6 +153,277 @@ function phoneStateUpdateMessage(args: {
     },
   });
 }
+
+function commandAckMessage(args: {
+  requestId: string;
+  deviceId?: string;
+  sessionId?: string;
+  action?: "display_text" | "capture_photo";
+}) {
+  return JSON.stringify({
+    version: PROTOCOL_VERSION,
+    type: "command_ack",
+    deviceId: args.deviceId ?? "device-a",
+    requestId: args.requestId,
+    ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+    timestamp: 1_700_000_000_001,
+    payload: {
+      action: args.action ?? "display_text",
+      acknowledgedAt: 1_700_000_000_001,
+      runtimeState: "READY",
+    },
+  });
+}
+
+function commandStatusMessage(args: {
+  requestId: string;
+  deviceId?: string;
+  sessionId?: string;
+  action?: "display_text" | "capture_photo";
+}) {
+  return JSON.stringify({
+    version: PROTOCOL_VERSION,
+    type: "command_status",
+    deviceId: args.deviceId ?? "device-a",
+    requestId: args.requestId,
+    ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+    timestamp: 1_700_000_000_002,
+    payload: {
+      action: args.action ?? "display_text",
+      status: "displaying",
+      statusAt: 1_700_000_000_002,
+    },
+  });
+}
+
+function commandResultMessage(args: {
+  requestId: string;
+  deviceId?: string;
+  sessionId?: string;
+}) {
+  return JSON.stringify({
+    version: PROTOCOL_VERSION,
+    type: "command_result",
+    deviceId: args.deviceId ?? "device-a",
+    requestId: args.requestId,
+    ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+    timestamp: 1_700_000_000_003,
+    payload: {
+      completedAt: 1_700_000_000_003,
+      result: {
+        action: "display_text",
+        displayed: true,
+        durationMs: 3_000,
+      },
+    },
+  });
+}
+
+function commandErrorMessage(args: {
+  requestId: string;
+  deviceId?: string;
+  sessionId?: string;
+  action?: "display_text" | "capture_photo";
+}) {
+  return JSON.stringify({
+    version: PROTOCOL_VERSION,
+    type: "command_error",
+    deviceId: args.deviceId ?? "device-a",
+    requestId: args.requestId,
+    ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+    timestamp: 1_700_000_000_002,
+    payload: {
+      action: args.action ?? "display_text",
+      failedAt: 1_700_000_000_002,
+      error: {
+        code: "BLUETOOTH_UNAVAILABLE",
+        message: "Bluetooth disconnected",
+        retryable: true,
+      },
+    },
+  });
+}
+
+describe("ws device command dispatch", () => {
+  test("ws device command dispatches submitted commands to the active phone session", async () => {
+    const { manager, service, controller, handlers } = createController();
+    const app = createHttpCommandsRoutes({
+      manager,
+      commandService: service,
+      dispatchPendingCommand: controller.dispatchPendingCommand,
+    });
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    const helloAck = socket.sent[0] as { payload: { sessionId: string } };
+
+    const response = await app.handle(
+      createSubmitRequest({
+        deviceId: "device-a",
+        action: "display_text",
+        payload: {
+          text: "Hello relay",
+          durationMs: 3_000,
+        },
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(body.status).toBe("DISPATCHED_TO_PHONE");
+    expect(socket.sent).toHaveLength(2);
+    expect(socket.sent[1]).toEqual({
+      version: PROTOCOL_VERSION,
+      type: "command",
+      deviceId: "device-a",
+      requestId: body.requestId,
+      sessionId: helloAck.payload.sessionId,
+      timestamp: 1_700_000_000_000,
+      payload: {
+        action: "display_text",
+        timeoutMs: 90_000,
+        params: {
+          text: "Hello relay",
+          durationMs: 3_000,
+        },
+      },
+    });
+    expect(service.getCommand(body.requestId)?.status).toBe("DISPATCHED_TO_PHONE");
+  });
+
+  test("ws device command dispatches created commands after phone reconnect", () => {
+    const { service, handlers } = createController();
+    const oldSocket = createSocket();
+    const newSocket = createSocket();
+
+    handlers.message(oldSocket, helloMessage("device-a"));
+    const oldHelloAck = oldSocket.sent[0] as { payload: { sessionId: string } };
+    const submitted = service.submitCommand({
+      sessionId: oldHelloAck.payload.sessionId,
+      request: {
+        deviceId: "device-a",
+        action: "display_text",
+        payload: {
+          text: "Reconnect me",
+          durationMs: 3_000,
+        },
+      },
+    });
+
+    handlers.close(oldSocket);
+    handlers.message(newSocket, helloMessage("device-a"));
+
+    const newHelloAck = newSocket.sent[0] as { payload: { sessionId: string } };
+    const dispatched = newSocket.sent[1] as { requestId: string; sessionId: string };
+
+    expect(newSocket.sent).toHaveLength(2);
+    expect(dispatched.requestId).toBe(submitted.command.requestId);
+    expect(dispatched.sessionId).toBe(newHelloAck.payload.sessionId);
+    expect(service.getCommand(submitted.command.requestId)?.status).toBe("DISPATCHED_TO_PHONE");
+  });
+
+  test("ws device command ingests ack and status updates through CommandService", () => {
+    const { service, controller, handlers } = createController();
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    const helloAck = socket.sent[0] as { payload: { sessionId: string } };
+    const submitted = service.submitCommand({
+      sessionId: helloAck.payload.sessionId,
+      request: {
+        deviceId: "device-a",
+        action: "display_text",
+        payload: {
+          text: "Track state",
+          durationMs: 3_000,
+        },
+      },
+    });
+
+    expect(controller.dispatchPendingCommand(submitted.command.requestId)).toBe(true);
+    expect(service.getCommand(submitted.command.requestId)?.status).toBe("DISPATCHED_TO_PHONE");
+
+    handlers.message(socket, commandAckMessage({ requestId: submitted.command.requestId }));
+    expect(service.getCommand(submitted.command.requestId)?.status).toBe("ACKNOWLEDGED_BY_PHONE");
+
+    handlers.message(socket, commandStatusMessage({ requestId: submitted.command.requestId }));
+    expect(service.getCommand(submitted.command.requestId)?.status).toBe("RUNNING");
+  });
+
+  test("command result ingestion completes acknowledged commands through CommandService", () => {
+    const { service, controller, handlers } = createController();
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    const helloAck = socket.sent[0] as { payload: { sessionId: string } };
+    const submitted = service.submitCommand({
+      sessionId: helloAck.payload.sessionId,
+      request: {
+        deviceId: "device-a",
+        action: "display_text",
+        payload: {
+          text: "Finish me",
+          durationMs: 3_000,
+        },
+      },
+    });
+
+    controller.dispatchPendingCommand(submitted.command.requestId);
+    handlers.message(socket, commandAckMessage({ requestId: submitted.command.requestId }));
+    handlers.message(socket, commandStatusMessage({ requestId: submitted.command.requestId }));
+    handlers.message(socket, commandResultMessage({ requestId: submitted.command.requestId }));
+
+    const completed = service.getCommand(submitted.command.requestId);
+    expect(completed?.status).toBe("COMPLETED");
+    expect(completed?.result).toEqual({
+      action: "display_text",
+      displayed: true,
+      durationMs: 3_000,
+    });
+  });
+
+  test("ws device command ingests phone terminal errors through CommandService", () => {
+    const { service, controller, handlers } = createController();
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    const helloAck = socket.sent[0] as { payload: { sessionId: string } };
+    const submitted = service.submitCommand({
+      sessionId: helloAck.payload.sessionId,
+      request: {
+        deviceId: "device-a",
+        action: "display_text",
+        payload: {
+          text: "Fail me",
+          durationMs: 3_000,
+        },
+      },
+    });
+
+    controller.dispatchPendingCommand(submitted.command.requestId);
+    handlers.message(socket, commandAckMessage({ requestId: submitted.command.requestId }));
+    handlers.message(socket, commandErrorMessage({ requestId: submitted.command.requestId }));
+
+    const failed = service.getCommand(submitted.command.requestId);
+    expect(failed?.status).toBe("FAILED");
+    expect(failed?.error?.code).toBe("BLUETOOTH_UNAVAILABLE");
+  });
+
+  test("command result ingestion rejects unknown request ids", () => {
+    const { handlers } = createController();
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    handlers.message(
+      socket,
+      commandResultMessage({
+        requestId: "req_00000000_0000_4000_8000_000000009999",
+      }),
+    );
+
+    expect(socket.closeCalls).toEqual([1008]);
+  });
+});
 
 describe("device websocket handlers", () => {
   test("pre-hello non-hello messages close connection", () => {
