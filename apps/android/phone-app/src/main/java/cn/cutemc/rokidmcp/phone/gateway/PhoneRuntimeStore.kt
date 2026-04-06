@@ -1,32 +1,15 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import cn.cutemc.rokidmcp.share.protocol.constants.RuntimeState
+import cn.cutemc.rokidmcp.share.protocol.constants.SetupState
+import cn.cutemc.rokidmcp.share.protocol.constants.UplinkState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-enum class PhoneSetupState {
-    UNINITIALIZED,
-    INITIALIZED,
-}
-
-enum class PhoneRuntimeState {
-    DISCONNECTED,
-    CONNECTING,
-    READY,
-    BUSY,
-    ERROR,
-}
-
-enum class PhoneUplinkState {
-    OFFLINE,
-    CONNECTING,
-    ONLINE,
-    ERROR,
-}
-
 data class PhoneRuntimeSnapshot(
-    val setupState: PhoneSetupState = PhoneSetupState.UNINITIALIZED,
-    val runtimeState: PhoneRuntimeState = PhoneRuntimeState.DISCONNECTED,
-    val uplinkState: PhoneUplinkState = PhoneUplinkState.OFFLINE,
+    val setupState: SetupState = SetupState.UNINITIALIZED,
+    val runtimeState: RuntimeState = RuntimeState.DISCONNECTED,
+    val uplinkState: UplinkState = UplinkState.OFFLINE,
     val lastSeenAt: Long? = null,
     val activeCommandRequestId: String? = null,
     val lastErrorCode: String? = null,
