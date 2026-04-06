@@ -4,7 +4,9 @@ import { Value } from "@sinclair/typebox/value";
 import {
   CapabilitiesSchema,
   CapabilitySchema,
+  CommandStatusSchema,
   DeviceSessionStateSchema,
+  ImageStatusSchema,
   RuntimeStateSchema,
   SetupStateSchema,
   UplinkStateSchema,
@@ -25,6 +27,16 @@ describe("state schemas", () => {
 
   test("DeviceSessionStateSchema accepts STALE", () => {
     expect(Value.Check(DeviceSessionStateSchema, "STALE")).toBe(true);
+  });
+
+  test("CommandStatusSchema accepts CANCELLED and rejects IMAGE_UPLOADING", () => {
+    expect(Value.Check(CommandStatusSchema, "CANCELLED")).toBe(true);
+    expect(Value.Check(CommandStatusSchema, "IMAGE_UPLOADING")).toBe(false);
+  });
+
+  test("ImageStatusSchema accepts UPLOADED and rejects EXPIRED", () => {
+    expect(Value.Check(ImageStatusSchema, "UPLOADED")).toBe(true);
+    expect(Value.Check(ImageStatusSchema, "EXPIRED")).toBe(false);
   });
 
   test("CapabilitiesSchema accepts list and CapabilitySchema accepts capture_photo", () => {
