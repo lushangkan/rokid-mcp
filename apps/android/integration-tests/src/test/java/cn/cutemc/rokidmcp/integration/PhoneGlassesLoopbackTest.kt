@@ -14,7 +14,6 @@ import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportEvent
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportState
 import cn.cutemc.rokidmcp.glasses.gateway.RfcommServerTransport
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.phone.gateway.PhoneHelloConfig
@@ -145,12 +144,8 @@ class PhoneGlassesLoopbackTest {
             },
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = DefaultLocalFrameCodec(),
                 clock = clock,
-                frameSender = EncodedLocalFrameSender { frameBytes ->
-                    val decoded = DefaultLocalFrameCodec().decode(frameBytes)
-                    transport.send(decoded.header, decoded.body)
-                },
+                frameSender = GlassesFrameSender(transport::send),
             ),
             clock = clock,
             frameSender = GlassesFrameSender(transport::send),
