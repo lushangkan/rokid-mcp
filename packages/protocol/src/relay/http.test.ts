@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Value } from "@sinclair/typebox/value";
 import {
+  DisplayTextCommandPayloadSchema,
   CommandStatusResponseSchema,
   GetDeviceStatusParamsSchema,
   GetDeviceStatusResponseSchema,
@@ -50,6 +51,13 @@ describe("relay http schema", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  test("keeps display_text payload shape minimal", () => {
+    expect(Object.keys(DisplayTextCommandPayloadSchema.properties)).toEqual([
+      "text",
+      "durationMs",
+    ]);
   });
 
   test("accepts capture_photo submit command response with reserved image", () => {
@@ -194,7 +202,7 @@ describe("relay http schema", () => {
     ).toBe(false);
   });
 
-  test("rejects submit command payload drift", () => {
+  test("rejects extra submit command payload fields", () => {
     expect(
       Value.Check(SubmitCommandRequestSchema, {
         deviceId: "rokid_glasses_01",
@@ -202,7 +210,7 @@ describe("relay http schema", () => {
         payload: {
           text: "hello world",
           durationMs: 2_000,
-          priority: "high",
+          style: "warning",
         },
       }),
     ).toBe(false);
