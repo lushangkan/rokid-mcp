@@ -4,13 +4,17 @@ import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
+import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
 import cn.cutemc.rokidmcp.glasses.gateway.Clock as GlassesClock
+import cn.cutemc.rokidmcp.glasses.gateway.CommandDispatcher
+import cn.cutemc.rokidmcp.glasses.gateway.ExclusiveExecutionGuard
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesAppController
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesLocalLinkSession
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesRuntimeStore
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportEvent
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportState
 import cn.cutemc.rokidmcp.glasses.gateway.RfcommServerTransport
+import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
 import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
@@ -147,27 +151,37 @@ class CapturePhotoExecutorLoopbackTest {
             controller = GlassesAppController(GlassesRuntimeStore()),
             clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
             sessionScope = backgroundScope,
-            capturePhotoExecutor = CapturePhotoExecutor(
-                cameraAdapter = object : CameraAdapter {
-                    override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
-                        CameraCapture(
-                            bytes = imageBytes,
-                            width = 800,
-                            height = 600,
-                        )
-                },
-                checksumCalculator = ChecksumCalculator(),
-                imageChunkSender = ImageChunkSender(
-                    codec = localCodec,
-                    clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
-                    frameSender = EncodedLocalFrameSender { frameBytes ->
-                        val decoded = localCodec.decode(frameBytes)
-                        pair.server.send(decoded.header, decoded.body)
-                    },
-                    chunkSizeBytes = 4,
-                ),
+            commandDispatcher = CommandDispatcher(
                 clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
+                scope = backgroundScope,
                 frameSender = GlassesFrameSender(pair.server::send),
+                exclusiveGuard = ExclusiveExecutionGuard(),
+                displayTextExecutor = DisplayTextExecutor(
+                    textRenderer = TextRenderer { _, _ -> Unit },
+                    clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
+                ),
+                capturePhotoExecutor = CapturePhotoExecutor(
+                    cameraAdapter = object : CameraAdapter {
+                        override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
+                            CameraCapture(
+                                bytes = imageBytes,
+                                width = 800,
+                                height = 600,
+                            )
+                    },
+                    checksumCalculator = ChecksumCalculator(),
+                    imageChunkSender = ImageChunkSender(
+                        codec = localCodec,
+                        clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
+                        frameSender = EncodedLocalFrameSender { frameBytes ->
+                            val decoded = localCodec.decode(frameBytes)
+                            pair.server.send(decoded.header, decoded.body)
+                        },
+                        chunkSizeBytes = 4,
+                    ),
+                    clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
+                    frameSender = GlassesFrameSender(pair.server::send),
+                ),
             ),
         )
         backgroundScope.launch {

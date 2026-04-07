@@ -1,6 +1,7 @@
 package cn.cutemc.rokidmcp.integration
 
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
+import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.gateway.Clock as GlassesClock
 import cn.cutemc.rokidmcp.glasses.gateway.CommandDispatcher
 import cn.cutemc.rokidmcp.glasses.gateway.ExclusiveExecutionGuard
@@ -10,8 +11,13 @@ import cn.cutemc.rokidmcp.glasses.gateway.GlassesRuntimeStore
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportEvent
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportState
 import cn.cutemc.rokidmcp.glasses.gateway.RfcommServerTransport
+import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
+import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
+import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.phone.gateway.ActiveCommandRegistry
 import cn.cutemc.rokidmcp.phone.gateway.Clock
 import cn.cutemc.rokidmcp.phone.gateway.IncomingImageAssembler
@@ -134,6 +140,26 @@ class DisplayTextCommandLoopbackTest {
                 displayTextExecutor = DisplayTextExecutor(
                     textRenderer = TextRenderer { text, durationMs -> rendered += text to durationMs },
                     clock = LoopbackDisplayGlassesClock(1_717_194_000L),
+                ),
+                capturePhotoExecutor = CapturePhotoExecutor(
+                    cameraAdapter = object : CameraAdapter {
+                        override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) = CameraCapture(
+                            bytes = "jpeg-loopback".encodeToByteArray(),
+                            width = 640,
+                            height = 480,
+                        )
+                    },
+                    checksumCalculator = ChecksumCalculator(),
+                    imageChunkSender = ImageChunkSender(
+                        codec = DefaultLocalFrameCodec(),
+                        clock = LoopbackDisplayGlassesClock(1_717_194_000L),
+                        frameSender = EncodedLocalFrameSender { frameBytes ->
+                            val decoded = DefaultLocalFrameCodec().decode(frameBytes)
+                            pair.server.send(decoded.header, decoded.body)
+                        },
+                    ),
+                    clock = LoopbackDisplayGlassesClock(1_717_194_000L),
+                    frameSender = GlassesFrameSender(pair.server::send),
                 ),
             ),
         )
