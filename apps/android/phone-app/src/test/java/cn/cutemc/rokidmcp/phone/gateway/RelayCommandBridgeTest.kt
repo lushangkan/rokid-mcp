@@ -6,6 +6,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.ChunkData
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
 import cn.cutemc.rokidmcp.share.protocol.local.CommandAck
+import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.relay.CapturePhotoCommandDispatchPayload
@@ -23,6 +24,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RelayCommandBridgeTest {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun `dispatch forwards local command and reports relay ack statuses`() = runTest {
         val webSocket = FakeRelayWebSocket()
@@ -54,6 +56,7 @@ class RelayCommandBridgeTest {
         assertTrue(webSocket.sentTexts.any { it.contains("\"status\":\"waiting_glasses_ack\"") })
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun `capture photo result waits for upload success before terminal result`() = runTest {
         val imageBytes = "jpeg-bytes".encodeToByteArray()
@@ -161,7 +164,12 @@ class RelayCommandBridgeTest {
                     requestId = "req_capture_1",
                     transferId = "trf_test_1",
                     timestamp = 1_717_172_604L,
-                    payload = ChunkData(index = 0, offset = 0L, size = imageBytes.size, chunkChecksum = "ignored"),
+                    payload = ChunkData(
+                        index = 0,
+                        offset = 0L,
+                        size = imageBytes.size,
+                        chunkChecksum = LocalProtocolChecksums.crc32(imageBytes),
+                    ),
                 ),
                 body = imageBytes,
             ),
@@ -186,6 +194,51 @@ class RelayCommandBridgeTest {
         assertTrue(uploadedIndex >= 0)
         assertTrue(resultIndex > uploadedIndex)
         assertEquals(null, runtimeUpdates.last().first)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `chunk data without a binary body fails the active capture command`() = runTest {
+        val webSocket = FakeRelayWebSocket()
+        val client = relayClient(webSocket)
+        val runtimeUpdates = mutableListOf<Triple<String?, String?, String?>>()
+        val bridge = RelayCommandBridge(
+            relayBaseUrl = "https://relay.example.com",
+            deviceId = "phone-device",
+            clock = FakeClock(1_717_172_700L),
+            relaySessionClient = client,
+            activeCommandRegistry = ActiveCommandRegistry(),
+            localCommandForwarder = LocalCommandForwarder(
+                clock = FakeClock(1_717_172_700L),
+                sender = LocalFrameSender { _, _ -> Unit },
+            ),
+            incomingImageAssembler = IncomingImageAssembler(),
+            relayImageUploader = RelayImageUploader(httpExecutor = RelayHttpExecutor { error("unused") }),
+            runtimeUpdater = { requestId, code, message -> runtimeUpdates += Triple(requestId, code, message) },
+        )
+
+        bridge.handleRelaySessionEvent(RelaySessionEvent.CommandDispatched(captureDispatch()))
+        bridge.handleLocalSessionEvent(
+            PhoneLocalSessionEvent.FrameReceived(
+                header = LocalFrameHeader(
+                    type = LocalMessageType.CHUNK_DATA,
+                    requestId = "req_capture_1",
+                    transferId = "trf_test_1",
+                    timestamp = 1_717_172_701L,
+                    payload = ChunkData(
+                        index = 0,
+                        offset = 0L,
+                        size = 4,
+                        chunkChecksum = "deadbeef",
+                    ),
+                ),
+                body = null,
+            ),
+        )
+
+        assertTrue(webSocket.sentTexts.any { it.contains("\"type\":\"command_error\"") })
+        assertTrue(webSocket.sentTexts.any { it.contains("PROTOCOL_INVALID_PAYLOAD") })
+        assertEquals(Triple(null, "PROTOCOL_INVALID_PAYLOAD", "chunk_data frame is missing its binary body"), runtimeUpdates.last())
     }
 
     private suspend fun relayClient(webSocket: FakeRelayWebSocket): RelaySessionClient {

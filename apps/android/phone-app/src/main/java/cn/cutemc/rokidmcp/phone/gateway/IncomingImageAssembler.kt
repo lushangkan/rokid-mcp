@@ -5,8 +5,8 @@ import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkData
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
+import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
 import java.io.ByteArrayOutputStream
-import java.security.MessageDigest
 
 data class AssembledImage(
     val requestId: String,
@@ -58,6 +58,18 @@ class IncomingImageAssembler {
                 message = "expected chunk offset ${current.writtenBytes} but received ${payload.offset}",
             )
         }
+        if (payload.size != body.size) {
+            throw ImageAssemblyException(
+                code = LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD,
+                message = "chunk body size ${body.size} does not match declared size ${payload.size}",
+            )
+        }
+        if (!payload.chunkChecksum.equals(LocalProtocolChecksums.crc32(body), ignoreCase = true)) {
+            throw ImageAssemblyException(
+                code = LocalProtocolErrorCodes.IMAGE_CHECKSUM_MISMATCH,
+                message = "chunk body checksum does not match transfer metadata",
+            )
+        }
 
         current.buffer.write(body)
         current.nextIndex += 1
@@ -87,7 +99,7 @@ class IncomingImageAssembler {
             )
         }
 
-        val computedSha256 = bytes.sha256Hex()
+        val computedSha256 = LocalProtocolChecksums.sha256(bytes)
         val expectedHashes = listOfNotNull(current.start.sha256, payload.sha256).distinct()
         if (expectedHashes.any { !it.equals(computedSha256, ignoreCase = true) }) {
             throw ImageAssemblyException(
@@ -141,7 +153,3 @@ class ImageAssemblyException(
     val code: String,
     override val message: String,
 ) : IllegalStateException(message)
-
-private fun ByteArray.sha256Hex(): String = MessageDigest.getInstance(LocalProtocolConstants.FILE_CHECKSUM_ALGO)
-    .digest(this)
-    .joinToString(separator = "") { byte -> "%02x".format(byte) }

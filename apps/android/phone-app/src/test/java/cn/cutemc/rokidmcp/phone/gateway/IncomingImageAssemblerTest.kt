@@ -4,6 +4,7 @@ import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkData
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
+import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
 import java.security.MessageDigest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -29,13 +30,23 @@ class IncomingImageAssemblerTest {
         assembler.append(
             requestId = "req_capture_1",
             transferId = "trf_test_1",
-            payload = ChunkData(index = 0, offset = 0L, size = 4, chunkChecksum = "ignored"),
+            payload = ChunkData(
+                index = 0,
+                offset = 0L,
+                size = 4,
+                chunkChecksum = LocalProtocolChecksums.crc32(bytes.copyOfRange(0, 4)),
+            ),
             body = bytes.copyOfRange(0, 4),
         )
         assembler.append(
             requestId = "req_capture_1",
             transferId = "trf_test_1",
-            payload = ChunkData(index = 1, offset = 4L, size = bytes.size - 4, chunkChecksum = "ignored"),
+            payload = ChunkData(
+                index = 1,
+                offset = 4L,
+                size = bytes.size - 4,
+                chunkChecksum = LocalProtocolChecksums.crc32(bytes.copyOfRange(4, bytes.size)),
+            ),
             body = bytes.copyOfRange(4, bytes.size),
         )
 
@@ -64,7 +75,12 @@ class IncomingImageAssemblerTest {
         assembler.append(
             requestId = "req_capture_1",
             transferId = "trf_test_1",
-            payload = ChunkData(index = 0, offset = 0L, size = bytes.size, chunkChecksum = "ignored"),
+            payload = ChunkData(
+                index = 0,
+                offset = 0L,
+                size = bytes.size,
+                chunkChecksum = LocalProtocolChecksums.crc32(bytes),
+            ),
             body = bytes,
         )
 
@@ -73,6 +89,60 @@ class IncomingImageAssemblerTest {
                 requestId = "req_capture_1",
                 transferId = "trf_test_1",
                 payload = ChunkEnd(totalChunks = 1, totalSize = bytes.size.toLong(), sha256 = "deadbeef"),
+            )
+        }
+
+        assertEquals(LocalProtocolErrorCodes.IMAGE_CHECKSUM_MISMATCH, error.code)
+    }
+
+    @Test
+    fun `append rejects chunk body size mismatch`() {
+        val bytes = "jpeg-bytes".encodeToByteArray()
+        val assembler = IncomingImageAssembler()
+        assembler.start(
+            requestId = "req_capture_1",
+            transferId = "trf_test_1",
+            payload = ChunkStart(totalSize = bytes.size.toLong()),
+        )
+
+        val error = assertThrows(ImageAssemblyException::class.java) {
+            assembler.append(
+                requestId = "req_capture_1",
+                transferId = "trf_test_1",
+                payload = ChunkData(
+                    index = 0,
+                    offset = 0L,
+                    size = bytes.size + 1,
+                    chunkChecksum = LocalProtocolChecksums.crc32(bytes),
+                ),
+                body = bytes,
+            )
+        }
+
+        assertEquals(LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD, error.code)
+    }
+
+    @Test
+    fun `append rejects chunk checksum mismatch`() {
+        val bytes = "jpeg-bytes".encodeToByteArray()
+        val assembler = IncomingImageAssembler()
+        assembler.start(
+            requestId = "req_capture_1",
+            transferId = "trf_test_1",
+            payload = ChunkStart(totalSize = bytes.size.toLong()),
+        )
+
+        val error = assertThrows(ImageAssemblyException::class.java) {
+            assembler.append(
+                requestId = "req_capture_1",
+                transferId = "trf_test_1",
+                payload = ChunkData(
+                    index = 0,
+                    offset = 0L,
+                    size = bytes.size,
+                    chunkChecksum = "deadbeef",
+                ),
+                body = bytes,
             )
         }
 

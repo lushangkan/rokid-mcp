@@ -160,7 +160,12 @@ class RelayCommandBridge(
                 LocalMessageType.COMMAND_RESULT -> handleLocalCommandResult(requestId, header.payload as? LocalCommandResult ?: return)
                 LocalMessageType.COMMAND_ERROR -> handleLocalCommandError(requestId, header.payload as? CommandError ?: return)
                 LocalMessageType.CHUNK_START -> handleChunkStart(requestId, header.transferId, header.payload as? ChunkStart ?: return)
-                LocalMessageType.CHUNK_DATA -> handleChunkData(requestId, header.transferId, header.payload as? ChunkData ?: return, body ?: ByteArray(0))
+                LocalMessageType.CHUNK_DATA -> handleChunkData(
+                    requestId,
+                    header.transferId,
+                    header.payload as? ChunkData ?: return,
+                    requireChunkBody(body),
+                )
                 LocalMessageType.CHUNK_END -> handleChunkEnd(requestId, header.transferId, header.payload as? ChunkEnd ?: return)
                 else -> Unit
             }
@@ -366,6 +371,13 @@ class RelayCommandBridge(
         return transferId ?: throw ActiveCommandRegistryException(
             code = LocalProtocolErrorCodes.PROTOCOL_TRANSFER_ID_REQUIRED,
             message = "capture photo image transfer is missing transferId",
+        )
+    }
+
+    private fun requireChunkBody(body: ByteArray?): ByteArray {
+        return body ?: throw ImageAssemblyException(
+            code = LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD,
+            message = "chunk_data frame is missing its binary body",
         )
     }
 }
