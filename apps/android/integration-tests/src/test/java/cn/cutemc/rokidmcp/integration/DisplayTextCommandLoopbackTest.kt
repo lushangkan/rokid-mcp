@@ -15,7 +15,6 @@ import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.phone.gateway.ActiveCommandRegistry
@@ -151,12 +150,8 @@ class DisplayTextCommandLoopbackTest {
                     },
                     checksumCalculator = ChecksumCalculator(),
                     imageChunkSender = ImageChunkSender(
-                        codec = DefaultLocalFrameCodec(),
                         clock = LoopbackDisplayGlassesClock(1_717_194_000L),
-                        frameSender = EncodedLocalFrameSender { frameBytes ->
-                            val decoded = DefaultLocalFrameCodec().decode(frameBytes)
-                            pair.server.send(decoded.header, decoded.body)
-                        },
+                        frameSender = GlassesFrameSender(pair.server::send),
                     ),
                     clock = LoopbackDisplayGlassesClock(1_717_194_000L),
                     frameSender = GlassesFrameSender(pair.server::send),
