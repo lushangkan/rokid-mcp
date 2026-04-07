@@ -6,6 +6,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import cn.cutemc.rokidmcp.glasses.GlassesApp
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.CameraXCameraAdapter
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
@@ -48,6 +49,10 @@ class GlassesGatewayService : LifecycleService() {
         val composition = createActiveGlassesGatewayComposition(
             app = application as GlassesApp,
             sessionScope = lifecycleScope,
+            cameraAdapter = CameraXCameraAdapter(
+                context = applicationContext,
+                lifecycleOwner = this,
+            ),
         )
 
         controller = composition.controller
@@ -87,12 +92,9 @@ internal data class ActiveGlassesGatewayComposition(
 internal fun createActiveGlassesGatewayComposition(
     app: GlassesApp,
     sessionScope: CoroutineScope,
+    cameraAdapter: CameraAdapter,
     transport: RfcommServerTransport = AndroidRfcommServerTransport(),
     clock: Clock = SystemClock,
-    cameraAdapter: CameraAdapter = object : CameraAdapter {
-        override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
-            throw NotImplementedError("Camera requires runtime dependency injection")
-    },
 ): ActiveGlassesGatewayComposition {
     val localCodec = DefaultLocalFrameCodec()
     val controller = GlassesAppController(app.runtimeStore)

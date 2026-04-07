@@ -22,6 +22,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.ExecutingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
+import kotlinx.coroutines.CancellationException
 
 class CapturePhotoExecutor(
     private val cameraAdapter: CameraAdapter,
@@ -45,6 +46,17 @@ class CapturePhotoExecutor(
                 requestId = requestId,
                 code = LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED,
                 message = error.message ?: "camera returned an invalid jpeg payload",
+                retryable = false,
+            )
+            return
+        } catch (error: Throwable) {
+            if (error is CancellationException) {
+                throw error
+            }
+            sendFailure(
+                requestId = requestId,
+                code = LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED,
+                message = error.message ?: "camera capture failed",
                 retryable = false,
             )
             return

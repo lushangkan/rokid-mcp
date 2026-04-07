@@ -22,6 +22,8 @@ import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.ExecutingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -194,6 +196,51 @@ class CapturePhotoExecutorTest {
         assertEquals(LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED, error.error.code)
         assertTrue(error.error.retryable)
         assertTrue(commandFrames.none { it.first.type == LocalMessageType.COMMAND_RESULT })
+    }
+
+    @Test
+    fun `executor emits command error when adapter throws unexpected failure`() = runTest {
+        val commandFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
+        val executor = CapturePhotoExecutor(
+            cameraAdapter = object : CameraAdapter {
+                override suspend fun capture(quality: CapturePhotoQuality?) = throw IOException("disk read failed")
+            },
+            checksumCalculator = ChecksumCalculator(),
+            imageChunkSender = ImageChunkSender(
+                codec = DefaultLocalFrameCodec(),
+                clock = FakeClock(1_717_180_500L),
+                frameSender = EncodedLocalFrameSender { },
+            ),
+            clock = FakeClock(1_717_180_500L),
+            frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
+        )
+
+        executor.execute(requestId = "req_capture_5", command = captureCommand(maxBytes = 4096))
+
+        assertEquals(LocalMessageType.COMMAND_ERROR, commandFrames.last().first.type)
+        val error = commandFrames.last().first.payload as CommandError
+        assertEquals(LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED, error.error.code)
+        assertEquals("disk read failed", error.error.message)
+        assertTrue(commandFrames.none { it.first.type == LocalMessageType.COMMAND_RESULT })
+    }
+
+    @Test(expected = CancellationException::class)
+    fun `executor preserves cancellation from adapter`() = runTest {
+        val executor = CapturePhotoExecutor(
+            cameraAdapter = object : CameraAdapter {
+                override suspend fun capture(quality: CapturePhotoQuality?) = throw CancellationException("capture cancelled")
+            },
+            checksumCalculator = ChecksumCalculator(),
+            imageChunkSender = ImageChunkSender(
+                codec = DefaultLocalFrameCodec(),
+                clock = FakeClock(1_717_180_600L),
+                frameSender = EncodedLocalFrameSender { },
+            ),
+            clock = FakeClock(1_717_180_600L),
+            frameSender = GlassesFrameSender { _, _ -> },
+        )
+
+        executor.execute(requestId = "req_capture_6", command = captureCommand(maxBytes = 4096))
     }
 
     private fun captureCommand(maxBytes: Long, mediaType: String = LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG) = CapturePhotoCommand(

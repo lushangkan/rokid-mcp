@@ -1,6 +1,9 @@
 package cn.cutemc.rokidmcp.glasses
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,11 +21,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesGatewayService
 import cn.cutemc.rokidmcp.glasses.ui.theme.RokidMCPGlassesTheme
 
 class MainActivity : ComponentActivity() {
+    private val requestCameraPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+
     private val glassesApp: GlassesApp
         get() = application as GlassesApp
 
@@ -30,6 +38,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         startService(GlassesGatewayService.createStartIntent(this))
+        ensureCameraPermissionRequested()
         setContent {
             RokidMCPGlassesTheme {
                 val displayState by glassesApp.displayStateStore.state.collectAsStateWithLifecycle()
@@ -53,5 +62,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun ensureCameraPermissionRequested() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        requestCameraPermission.launch(Manifest.permission.CAMERA)
     }
 }
