@@ -7,19 +7,15 @@ import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkData
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
-import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
+import cn.cutemc.rokidmcp.share.protocol.local.ProtocolCodecException
 import kotlinx.coroutines.CancellationException
 import kotlin.math.min
 
 fun interface GlassesFrameSender {
     suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?)
-}
-
-fun interface EncodedLocalFrameSender {
-    suspend fun send(frameBytes: ByteArray)
 }
 
 class ImageChunkSenderException(
@@ -29,9 +25,8 @@ class ImageChunkSenderException(
 ) : IllegalStateException(message, cause)
 
 class ImageChunkSender(
-    private val codec: LocalFrameCodec,
     private val clock: Clock,
-    private val frameSender: EncodedLocalFrameSender,
+    private val frameSender: GlassesFrameSender,
     private val chunkSizeBytes: Int = LocalProtocolConstants.CHUNK_SIZE_BYTES,
 ) {
     init {
@@ -144,26 +139,18 @@ class ImageChunkSender(
     }
 
     private suspend fun sendFrame(header: LocalFrameHeader<*>, body: ByteArray? = null) {
-        val encoded = try {
-            codec.encode(header, body)
+        try {
+            frameSender.send(header, body)
         } catch (error: CancellationException) {
             throw error
         } catch (error: ImageChunkSenderException) {
             throw error
-        } catch (error: Exception) {
+        } catch (error: ProtocolCodecException) {
             throw ImageChunkSenderException(
                 code = LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD,
                 message = error.message ?: "failed to encode image transfer frame",
                 cause = error,
             )
-        }
-
-        try {
-            frameSender.send(encoded)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: ImageChunkSenderException) {
-            throw error
         } catch (error: Exception) {
             throw ImageChunkSenderException(
                 code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
