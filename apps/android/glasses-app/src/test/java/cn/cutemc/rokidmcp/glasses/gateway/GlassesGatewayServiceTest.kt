@@ -4,6 +4,9 @@ import cn.cutemc.rokidmcp.glasses.GlassesApp
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality
+import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
+import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams
+import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
@@ -54,6 +57,47 @@ class GlassesGatewayServiceTest {
         runCurrent()
 
         assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.COMMAND_ACK })
+        assertTrue(transport.sentFrames.last().header.type == LocalMessageType.COMMAND_RESULT)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `active service composition wires capture command to chunked result frames`() = runTest {
+        val app = GlassesApp()
+        val transport = FakeRfcommServerTransport()
+        val composition = createActiveGlassesGatewayComposition(
+            app = app,
+            sessionScope = backgroundScope,
+            cameraAdapter = object : CameraAdapter {
+                override suspend fun capture(quality: CapturePhotoQuality?) = CameraCapture(
+                    bytes = "jpeg-test".encodeToByteArray(),
+                    width = 640,
+                    height = 480,
+                )
+            },
+            transport = transport,
+            clock = FakeClock(1_717_200_100L),
+        )
+
+        composition.commandDispatcher.handleCommand(
+            LocalFrameHeader(
+                type = LocalMessageType.COMMAND,
+                requestId = "req_capture_1",
+                timestamp = 1_717_200_101L,
+                payload = CapturePhotoCommand(
+                    timeoutMs = 30_000L,
+                    params = CapturePhotoCommandParams(quality = CapturePhotoQuality.MEDIUM),
+                    transfer = CaptureTransfer(
+                        transferId = "trf_capture_1",
+                        maxBytes = 4_096L,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.CHUNK_START })
+        assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.CHUNK_END })
         assertTrue(transport.sentFrames.last().header.type == LocalMessageType.COMMAND_RESULT)
     }
 }
