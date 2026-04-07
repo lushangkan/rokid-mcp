@@ -29,6 +29,13 @@ class CommandDispatcher(
     private val displayTextExecutor: DisplayTextExecutor,
     private val capturePhotoExecutor: CapturePhotoExecutor? = null,
 ) {
+    val supportedActions: List<CommandAction> = buildList {
+        add(CommandAction.DISPLAY_TEXT)
+        if (capturePhotoExecutor != null) {
+            add(CommandAction.CAPTURE_PHOTO)
+        }
+    }
+
     private var activeCommandJob: Job? = null
 
     suspend fun handleCommand(header: LocalFrameHeader<*>) {
@@ -66,8 +73,8 @@ class CommandDispatcher(
             try {
                 sendCommandAck(requestId, command.action)
                 sendExecutingStatus(requestId, command.action)
-                val result = displayTextExecutor.execute(command)
                 sendDisplayingStatus(requestId)
+                val result = displayTextExecutor.execute(command)
                 sendDisplayTextResult(requestId, result)
             } catch (error: DisplayTextExecutionException) {
                 sendCommandError(
