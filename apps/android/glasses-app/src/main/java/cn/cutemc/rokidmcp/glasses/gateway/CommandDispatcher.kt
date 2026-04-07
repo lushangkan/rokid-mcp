@@ -27,14 +27,12 @@ class CommandDispatcher(
     private val frameSender: GlassesFrameSender,
     private val exclusiveGuard: ExclusiveExecutionGuard,
     private val displayTextExecutor: DisplayTextExecutor,
-    private val capturePhotoExecutor: CapturePhotoExecutor? = null,
+    private val capturePhotoExecutor: CapturePhotoExecutor,
 ) {
-    val supportedActions: List<CommandAction> = buildList {
-        add(CommandAction.DISPLAY_TEXT)
-        if (capturePhotoExecutor != null) {
-            add(CommandAction.CAPTURE_PHOTO)
-        }
-    }
+    val supportedActions: List<CommandAction> = listOf(
+        CommandAction.DISPLAY_TEXT,
+        CommandAction.CAPTURE_PHOTO,
+    )
 
     private var activeCommandJob: Job? = null
 
@@ -92,17 +90,6 @@ class CommandDispatcher(
     }
 
     private suspend fun dispatchCapturePhoto(requestId: String, command: CapturePhotoCommand) {
-        val executor = capturePhotoExecutor ?: run {
-            sendCommandError(
-                requestId = requestId,
-                action = command.action,
-                code = LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL,
-                message = "capture_photo execution is not configured",
-                retryable = false,
-            )
-            return
-        }
-
         if (!exclusiveGuard.tryAcquire(requestId)) {
             sendCommandBusy(requestId, command.action)
             return
@@ -110,7 +97,7 @@ class CommandDispatcher(
 
         activeCommandJob = scope.launch {
             try {
-                executor.execute(requestId = requestId, command = command)
+                capturePhotoExecutor.execute(requestId = requestId, command = command)
             } finally {
                 exclusiveGuard.release(requestId)
                 activeCommandJob = null
