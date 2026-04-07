@@ -21,7 +21,6 @@ import {
   TimestampSchema,
   TerminalErrorSchema,
   TransferIdSchema,
-  UplinkStateSchema,
   UploadTokenSchema,
 } from "../common/index.js";
 
@@ -213,7 +212,6 @@ export const GetDeviceStatusDeviceSchema = Type.Object(
     sessionState: DeviceSessionStateSchema,
     setupState: SetupStateSchema,
     runtimeState: RuntimeStateSchema,
-    uplinkState: UplinkStateSchema,
     capabilities: CapabilitiesSchema,
     activeCommandRequestId: Type.Union([RequestIdSchema, Type.Null()]),
     lastErrorCode: NullableStringSchema,

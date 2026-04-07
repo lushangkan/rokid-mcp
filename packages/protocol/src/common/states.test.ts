@@ -9,7 +9,6 @@ import {
   ImageStatusSchema,
   RuntimeStateSchema,
   SetupStateSchema,
-  UplinkStateSchema,
 } from "./states.js";
 
 describe("state schemas", () => {
@@ -19,10 +18,6 @@ describe("state schemas", () => {
 
   test("RuntimeStateSchema accepts READY", () => {
     expect(Value.Check(RuntimeStateSchema, "READY")).toBe(true);
-  });
-
-  test("UplinkStateSchema rejects BROKEN", () => {
-    expect(Value.Check(UplinkStateSchema, "BROKEN")).toBe(false);
   });
 
   test("DeviceSessionStateSchema accepts STALE", () => {

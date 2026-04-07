@@ -34,7 +34,6 @@ describe("http device routes", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -44,7 +43,6 @@ describe("http device routes", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
-        uplinkState: "ONLINE",
         capabilities: ["capture_photo"],
       },
     });
@@ -70,7 +68,6 @@ describe("http device routes", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -82,7 +79,6 @@ describe("http device routes", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         activeCommandRequestId: null,
         lastErrorCode: "PHONE_ERR",
         lastErrorMessage: "phone runtime changed",
@@ -98,7 +94,6 @@ describe("http device routes", () => {
     expect(response.status).toBe(200);
     expect(json.device.deviceId).toBe("device-live");
     expect(json.device.runtimeState).toBe("BUSY");
-    expect(json.device.uplinkState).toBe("ERROR");
     expect(json.device.lastErrorCode).toBe("PHONE_ERR");
     expect(json.device.lastErrorMessage).toBe("phone runtime changed");
     expect(json.device.sessionId).toBe(sessionId);

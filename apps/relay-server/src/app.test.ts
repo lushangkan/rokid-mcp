@@ -103,7 +103,6 @@ describe("relay app", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });

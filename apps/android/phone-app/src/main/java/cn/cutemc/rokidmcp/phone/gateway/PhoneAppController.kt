@@ -392,7 +392,6 @@ class PhoneAppController(
 
         return previous.setupState != next.setupState ||
             previous.runtimeState != next.runtimeState ||
-            previous.uplinkState != next.uplinkState ||
             previous.lastErrorCode != next.lastErrorCode ||
             previous.lastErrorMessage != next.lastErrorMessage ||
             previous.activeCommandRequestId != next.activeCommandRequestId

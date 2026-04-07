@@ -279,7 +279,6 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           payload: {
             setupState: inbound.payload.setupState,
             runtimeState: inbound.payload.runtimeState,
-            uplinkState: inbound.payload.uplinkState,
             capabilities: inbound.payload.capabilities,
           },
         });
@@ -327,7 +326,6 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           socketId: ws.data.socketId,
           payload: {
             runtimeState: inbound.payload.runtimeState,
-            uplinkState: inbound.payload.uplinkState,
             activeCommandRequestId: inbound.payload.activeCommandRequestId,
           },
         });
@@ -344,7 +342,6 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           payload: {
             setupState: inbound.payload.setupState,
             runtimeState: inbound.payload.runtimeState,
-            uplinkState: inbound.payload.uplinkState,
             activeCommandRequestId,
             lastErrorCode: inbound.payload.lastErrorCode,
             lastErrorMessage: inbound.payload.lastErrorMessage,

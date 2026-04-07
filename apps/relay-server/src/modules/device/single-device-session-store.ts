@@ -3,7 +3,6 @@ import type {
   DeviceSessionState,
   RuntimeState,
   SetupState,
-  UplinkState,
 } from "@rokid-mcp/protocol";
 
 export type CurrentSessionRecord = {
@@ -14,7 +13,6 @@ export type CurrentSessionRecord = {
   sessionState: DeviceSessionState;
   setupState: SetupState;
   runtimeState: RuntimeState;
-  uplinkState: UplinkState;
   capabilities: Capabilities;
   activeCommandRequestId: string | null;
   lastErrorCode: string | null;

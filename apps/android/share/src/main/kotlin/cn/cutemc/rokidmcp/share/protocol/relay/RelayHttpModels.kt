@@ -10,7 +10,6 @@ import cn.cutemc.rokidmcp.share.protocol.constants.RelayProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.constants.RuntimeState
 import cn.cutemc.rokidmcp.share.protocol.constants.SetupState
 import cn.cutemc.rokidmcp.share.protocol.constants.TerminalErrorCode
-import cn.cutemc.rokidmcp.share.protocol.constants.UplinkState
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -210,7 +209,6 @@ data class GetDeviceStatusDevice(
     val sessionState: DeviceSessionState,
     val setupState: SetupState,
     val runtimeState: RuntimeState,
-    val uplinkState: UplinkState,
     val capabilities: List<CommandAction>,
     val activeCommandRequestId: String? = null,
     val lastErrorCode: String? = null,

@@ -64,7 +64,6 @@ function registerOnlineDevice(manager: DeviceSessionManager, deviceId = "rokid-d
     payload: {
       setupState: "INITIALIZED",
       runtimeState: "READY",
-      uplinkState: "ONLINE",
       capabilities: ["display_text", "capture_photo"],
     },
   });

@@ -8,7 +8,6 @@ import cn.cutemc.rokidmcp.share.protocol.constants.RelayProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.constants.RuntimeState
 import cn.cutemc.rokidmcp.share.protocol.constants.SetupState
 import cn.cutemc.rokidmcp.share.protocol.constants.TerminalErrorCode
-import cn.cutemc.rokidmcp.share.protocol.constants.UplinkState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -126,7 +125,6 @@ class RelayProtocolSerializationTest {
                 phoneInfo = RelayPhoneInfo(model = "Pixel"),
                 setupState = SetupState.INITIALIZED,
                 runtimeState = RuntimeState.READY,
-                uplinkState = UplinkState.CONNECTING,
                 capabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
             ),
         )

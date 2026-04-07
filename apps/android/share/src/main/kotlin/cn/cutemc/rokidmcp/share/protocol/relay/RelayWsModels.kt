@@ -5,7 +5,6 @@ import cn.cutemc.rokidmcp.share.protocol.constants.RelayProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.constants.RuntimeState
 import cn.cutemc.rokidmcp.share.protocol.constants.SetupState
 import cn.cutemc.rokidmcp.share.protocol.constants.TerminalErrorCode
-import cn.cutemc.rokidmcp.share.protocol.constants.UplinkState
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -74,7 +73,6 @@ data class RelayHelloPayload(
     val phoneInfo: RelayPhoneInfo,
     val setupState: SetupState,
     val runtimeState: RuntimeState,
-    val uplinkState: UplinkState,
     val capabilities: List<CommandAction>,
     val targetGlasses: TargetGlasses? = null,
     val relayConfig: RelayConfig? = null,
@@ -93,7 +91,6 @@ data class RelayHelloMessage(
 data class RelayHeartbeatPayload(
     val seq: Long,
     val runtimeState: RuntimeState,
-    val uplinkState: UplinkState,
     val pendingCommandCount: Int,
     val activeCommandRequestId: String? = null,
 )
@@ -112,7 +109,6 @@ data class RelayHeartbeatMessage(
 data class RelayPhoneStateUpdatePayload(
     val setupState: SetupState,
     val runtimeState: RuntimeState,
-    val uplinkState: UplinkState,
     val lastErrorCode: String? = null,
     val lastErrorMessage: String? = null,
     val activeCommandRequestId: String? = null,

@@ -3,7 +3,6 @@ import type {
   GetDeviceStatusResponse,
   RuntimeState,
   SetupState,
-  UplinkState,
 } from "@rokid-mcp/protocol";
 
 import {
@@ -21,7 +20,6 @@ type RegisterHelloInput = {
   payload: {
     setupState: SetupState;
     runtimeState: RuntimeState;
-    uplinkState: UplinkState;
     capabilities: Capabilities;
   };
 };
@@ -32,7 +30,6 @@ type HeartbeatInput = {
   socketId: string;
   payload: {
     runtimeState: RuntimeState;
-    uplinkState: UplinkState;
     activeCommandRequestId: string | null;
   };
 };
@@ -44,7 +41,6 @@ type PhoneStateUpdateInput = {
   payload: {
     setupState: SetupState;
     runtimeState: RuntimeState;
-    uplinkState: UplinkState;
     activeCommandRequestId: string | null;
     lastErrorCode?: string | null;
     lastErrorMessage?: string | null;
@@ -59,7 +55,6 @@ type DeviceSessionManagerOptions = {
 const DEFAULT_STATES = {
   setupState: "UNINITIALIZED" as const,
   runtimeState: "DISCONNECTED" as const,
-  uplinkState: "OFFLINE" as const,
 };
 
 export class DeviceSessionManager {
@@ -85,7 +80,6 @@ export class DeviceSessionManager {
       sessionState: "ONLINE",
       setupState: input.payload.setupState,
       runtimeState: input.payload.runtimeState,
-      uplinkState: input.payload.uplinkState,
       capabilities: [...input.payload.capabilities],
       activeCommandRequestId: null,
       lastErrorCode: null,
@@ -97,7 +91,6 @@ export class DeviceSessionManager {
     this.runtimes.set({
       deviceId: input.deviceId,
       runtimeState: input.payload.runtimeState,
-      uplinkState: input.payload.uplinkState,
       activeCommandRequestId: null,
       lastErrorCode: null,
       lastErrorMessage: null,
@@ -164,7 +157,6 @@ export class DeviceSessionManager {
 
     this.sessions.patch({
       runtimeState: input.payload.runtimeState,
-      uplinkState: input.payload.uplinkState,
       activeCommandRequestId: input.payload.activeCommandRequestId,
       lastErrorCode: null,
       lastErrorMessage: null,
@@ -176,7 +168,6 @@ export class DeviceSessionManager {
     this.runtimes.set({
       deviceId: input.deviceId,
       runtimeState: input.payload.runtimeState,
-      uplinkState: input.payload.uplinkState,
       activeCommandRequestId: input.payload.activeCommandRequestId,
       lastErrorCode: null,
       lastErrorMessage: null,
@@ -195,7 +186,6 @@ export class DeviceSessionManager {
     this.sessions.patch({
       setupState: input.payload.setupState,
       runtimeState: input.payload.runtimeState,
-      uplinkState: input.payload.uplinkState,
       lastSeenAt: seenAt,
       connected: true,
       sessionState: "ONLINE",
@@ -207,7 +197,6 @@ export class DeviceSessionManager {
     this.runtimes.set({
       deviceId: input.deviceId,
       runtimeState: input.payload.runtimeState,
-      uplinkState: input.payload.uplinkState,
       activeCommandRequestId: input.payload.activeCommandRequestId,
       lastErrorCode: input.payload.lastErrorCode ?? null,
       lastErrorMessage: input.payload.lastErrorMessage ?? null,
@@ -226,7 +215,6 @@ export class DeviceSessionManager {
       connected: false,
       sessionState: "CLOSED",
       runtimeState: "DISCONNECTED",
-      uplinkState: "OFFLINE",
       activeCommandRequestId: null,
       lastErrorCode: null,
       lastErrorMessage: null,
@@ -248,7 +236,6 @@ export class DeviceSessionManager {
           sessionState: "OFFLINE",
           setupState: DEFAULT_STATES.setupState,
           runtimeState: DEFAULT_STATES.runtimeState,
-          uplinkState: DEFAULT_STATES.uplinkState,
           capabilities: [],
           activeCommandRequestId: null,
           lastErrorCode: null,
@@ -272,7 +259,6 @@ export class DeviceSessionManager {
         sessionState: current.sessionState,
         setupState: current.setupState,
         runtimeState: stale || closed ? "DISCONNECTED" : runtime?.runtimeState ?? current.runtimeState,
-        uplinkState: stale || closed ? "OFFLINE" : runtime?.uplinkState ?? current.uplinkState,
         capabilities: [...current.capabilities],
         activeCommandRequestId: stale || closed ? null : runtime?.activeCommandRequestId ?? current.activeCommandRequestId,
         lastErrorCode: stale || closed ? null : runtime?.lastErrorCode ?? current.lastErrorCode,
@@ -316,7 +302,6 @@ export class DeviceSessionManager {
     this.runtimes.set({
       deviceId: record.deviceId,
       runtimeState: "DISCONNECTED",
-      uplinkState: "OFFLINE",
       activeCommandRequestId: null,
       lastErrorCode: null,
       lastErrorMessage: null,

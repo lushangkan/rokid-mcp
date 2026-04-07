@@ -26,7 +26,6 @@ describe("relay http schema", () => {
         sessionState: "OFFLINE",
         setupState: "UNINITIALIZED",
         runtimeState: "DISCONNECTED",
-        uplinkState: "OFFLINE",
         capabilities: [],
         activeCommandRequestId: null,
         lastErrorCode: null,
@@ -159,7 +158,6 @@ describe("relay http schema", () => {
         sessionState: "OFFLINE",
         setupState: "UNINITIALIZED",
         runtimeState: "DISCONNECTED",
-        uplinkState: "OFFLINE",
         capabilities: [],
         activeCommandRequestId: null,
         lastErrorCode: null,
@@ -171,6 +169,29 @@ describe("relay http schema", () => {
     };
 
     expect(Value.Check(GetDeviceStatusResponseSchema, response)).toBe(false);
+  });
+
+  test("rejects legacy uplinkState on device status response", () => {
+    expect(
+      Value.Check(GetDeviceStatusResponseSchema, {
+        ok: true,
+        device: {
+          deviceId: "rokid_glasses_01",
+          connected: false,
+          sessionState: "OFFLINE",
+          setupState: "UNINITIALIZED",
+          runtimeState: "DISCONNECTED",
+          uplinkState: "OFFLINE",
+          capabilities: [],
+          activeCommandRequestId: null,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          lastSeenAt: null,
+          sessionId: null,
+        },
+        timestamp: 1710000000000,
+      }),
+    ).toBe(false);
   });
 
   test("rejects submit command payload drift", () => {

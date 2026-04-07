@@ -14,13 +14,6 @@ export const RuntimeStateSchema = Type.Union([
   Type.Literal("ERROR"),
 ]);
 
-export const UplinkStateSchema = Type.Union([
-  Type.Literal("OFFLINE"),
-  Type.Literal("CONNECTING"),
-  Type.Literal("ONLINE"),
-  Type.Literal("ERROR"),
-]);
-
 export const DeviceSessionStateSchema = Type.Union([
   Type.Literal("OFFLINE"),
   Type.Literal("ONLINE"),
@@ -55,7 +48,6 @@ export const CapabilitiesSchema = Type.Array(CapabilitySchema, { minItems: 0 });
 
 export type SetupState = Static<typeof SetupStateSchema>;
 export type RuntimeState = Static<typeof RuntimeStateSchema>;
-export type UplinkState = Static<typeof UplinkStateSchema>;
 export type DeviceSessionState = Static<typeof DeviceSessionStateSchema>;
 export type CommandStatus = Static<typeof CommandStatusSchema>;
 export type ImageStatus = Static<typeof ImageStatusSchema>;
