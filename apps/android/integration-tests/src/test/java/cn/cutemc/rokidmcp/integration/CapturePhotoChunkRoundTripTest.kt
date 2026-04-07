@@ -1,13 +1,12 @@
 package cn.cutemc.rokidmcp.integration
 
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.phone.gateway.IncomingImageAssembler
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkData
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
-import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
@@ -19,34 +18,31 @@ import org.robolectric.annotation.Config
 class CapturePhotoChunkRoundTripTest {
     @Test
     fun `glasses chunk sender round trips through phone assembler`() = runTest {
-        val codec = DefaultLocalFrameCodec()
         val assembler = IncomingImageAssembler()
         val imageBytes = "jpeg-loopback-payload".encodeToByteArray()
         var assembled = false
         val sender = ImageChunkSender(
-            codec = codec,
             clock = IntegrationClock(1_717_181_000L),
-            frameSender = EncodedLocalFrameSender { frameBytes ->
-                val decoded = codec.decode(frameBytes)
-                when (decoded.header.type) {
+            frameSender = GlassesFrameSender { header, body ->
+                when (header.type) {
                     LocalMessageType.CHUNK_START -> assembler.start(
-                        requestId = decoded.header.requestId!!,
-                        transferId = decoded.header.transferId!!,
-                        payload = decoded.header.payload as ChunkStart,
+                        requestId = header.requestId!!,
+                        transferId = header.transferId!!,
+                        payload = header.payload as ChunkStart,
                     )
 
                     LocalMessageType.CHUNK_DATA -> assembler.append(
-                        requestId = decoded.header.requestId!!,
-                        transferId = decoded.header.transferId!!,
-                        payload = decoded.header.payload as ChunkData,
-                        body = decoded.body!!,
+                        requestId = header.requestId!!,
+                        transferId = header.transferId!!,
+                        payload = header.payload as ChunkData,
+                        body = body!!,
                     )
 
                     LocalMessageType.CHUNK_END -> {
                         val image = assembler.finish(
-                            requestId = decoded.header.requestId!!,
-                            transferId = decoded.header.transferId!!,
-                            payload = decoded.header.payload as ChunkEnd,
+                            requestId = header.requestId!!,
+                            transferId = header.transferId!!,
+                            payload = header.payload as ChunkEnd,
                         )
                         assertEquals("req_capture_round_trip", image.requestId)
                         assertEquals("trf_capture_round_trip", image.transferId)
@@ -57,7 +53,7 @@ class CapturePhotoChunkRoundTripTest {
                         assembled = true
                     }
 
-                    else -> error("Unexpected frame type ${decoded.header.type}")
+                    else -> error("Unexpected frame type ${header.type}")
                 }
             },
             chunkSizeBytes = 5,

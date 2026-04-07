@@ -15,7 +15,6 @@ import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportEvent
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportState
 import cn.cutemc.rokidmcp.glasses.gateway.RfcommServerTransport
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.phone.gateway.ActiveCommandRegistry
@@ -171,12 +170,8 @@ class CapturePhotoExecutorLoopbackTest {
                     },
                     checksumCalculator = ChecksumCalculator(),
                     imageChunkSender = ImageChunkSender(
-                        codec = localCodec,
                         clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
-                        frameSender = EncodedLocalFrameSender { frameBytes ->
-                            val decoded = localCodec.decode(frameBytes)
-                            pair.server.send(decoded.header, decoded.body)
-                        },
+                        frameSender = GlassesFrameSender(pair.server::send),
                         chunkSizeBytes = 4,
                     ),
                     clock = ExecutorLoopbackGlassesClock(1_717_183_000L),
