@@ -10,11 +10,15 @@ import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoResult
 import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
+import cn.cutemc.rokidmcp.share.protocol.local.CommandError
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
+import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
 import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
@@ -66,7 +70,7 @@ class GlassesLocalLinkSessionTest {
         assertEquals(LocalMessageType.HELLO_ACK, helloAck.type)
         assertTrue((helloAck.payload as HelloAckPayload).accepted)
         assertEquals(
-            listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
+            emptyList<CommandAction>(),
             (helloAck.payload as HelloAckPayload).capabilities,
         )
         assertEquals(Build.MODEL, (helloAck.payload as HelloAckPayload).glassesInfo?.model)
@@ -305,6 +309,91 @@ class GlassesLocalLinkSessionTest {
         assertEquals(800, result.result.width)
         assertEquals(600, result.result.height)
         assertEquals(null, runtimeStore.snapshot.value.lastErrorMessage)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `display text command falls back to unsupported error without dispatcher`() = runTest {
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_172_500L),
+            sessionScope = backgroundScope,
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(
+            GlassesTransportEvent.FrameReceived(
+                LocalFrameHeader(
+                    type = LocalMessageType.COMMAND,
+                    requestId = "req_display_1",
+                    timestamp = 1_717_172_501L,
+                    payload = DisplayTextCommand(
+                        timeoutMs = 30_000L,
+                        params = DisplayTextCommandParams(
+                            text = "hello glasses",
+                            durationMs = 3_000L,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(LocalMessageType.COMMAND_ERROR, transport.sentFrames.single().header.type)
+        val error = transport.sentFrames.single().header.payload as CommandError
+        assertEquals(CommandAction.DISPLAY_TEXT, error.action)
+        assertEquals(LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL, error.error.code)
+        assertEquals("display_text execution is not available in glasses-app yet", error.error.message)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `hello ack capabilities reflect configured dispatcher actions`() = runTest {
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_172_550L),
+            sessionScope = backgroundScope,
+            commandDispatcher = CommandDispatcher(
+                clock = FakeClock(1_717_172_550L),
+                scope = backgroundScope,
+                frameSender = GlassesFrameSender(transport::send),
+                exclusiveGuard = ExclusiveExecutionGuard(),
+                displayTextExecutor = cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor(
+                    textRenderer = cn.cutemc.rokidmcp.glasses.renderer.TextRenderer { _, _ -> Unit },
+                    clock = FakeClock(1_717_172_550L),
+                ),
+            ),
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(
+            GlassesTransportEvent.FrameReceived(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO,
+                    timestamp = 1_717_172_551L,
+                    payload = HelloPayload(
+                        role = LinkRole.PHONE,
+                        deviceId = "phone-device",
+                        appVersion = "1.0.0",
+                        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        val helloAck = transport.sentFrames.single().header.payload as HelloAckPayload
+        assertEquals(listOf(CommandAction.DISPLAY_TEXT), helloAck.capabilities)
 
         session.stop("test complete")
     }

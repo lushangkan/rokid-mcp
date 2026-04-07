@@ -34,7 +34,11 @@ class GlassesLocalLinkSession(
 ) {
     private var eventJob: Job? = null
     private var activeCommandJob: Job? = null
-    private val glassesCapabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO)
+    private val glassesCapabilities = when {
+        commandDispatcher != null -> commandDispatcher.supportedActions
+        capturePhotoExecutor != null -> listOf(CommandAction.CAPTURE_PHOTO)
+        else -> emptyList()
+    }
 
     suspend fun start() {
         if (eventJob?.isActive == true) {
@@ -116,13 +120,21 @@ class GlassesLocalLinkSession(
         val requestId = header.requestId ?: return
         when (val payload = header.payload) {
             is CapturePhotoCommand -> dispatchCapturePhotoCommand(requestId, payload)
-            is DisplayTextCommand -> sendUnsupportedCommandError(
-                requestId = requestId,
-                action = CommandAction.DISPLAY_TEXT,
-                message = "display_text execution is not available in glasses-app yet",
-            )
+            is DisplayTextCommand -> dispatchDisplayTextCommand(requestId, payload)
             else -> Unit
         }
+    }
+
+    private suspend fun dispatchDisplayTextCommand(
+        requestId: String,
+        payload: DisplayTextCommand,
+    ) {
+        // TODO: Remove this fallback once all command handling goes through CommandDispatcher.
+        sendUnsupportedCommandError(
+            requestId = requestId,
+            action = payload.action,
+            message = "display_text execution is not available in glasses-app yet",
+        )
     }
 
     private suspend fun dispatchCapturePhotoCommand(
