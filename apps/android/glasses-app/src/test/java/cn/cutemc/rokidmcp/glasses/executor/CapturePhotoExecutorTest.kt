@@ -5,7 +5,6 @@ import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.camera.CameraCaptureException
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.gateway.FakeClock
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality
@@ -18,7 +17,6 @@ import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
 import cn.cutemc.rokidmcp.share.protocol.local.CapturingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.CommandAck
 import cn.cutemc.rokidmcp.share.protocol.local.CommandError
-import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.ExecutingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
@@ -35,7 +33,6 @@ class CapturePhotoExecutorTest {
         val commandFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
         val chunkFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
         val clock = FakeClock(1_717_180_100L)
-        val codec = DefaultLocalFrameCodec()
         val imageBytes = "jpeg-stream".encodeToByteArray()
         val executor = CapturePhotoExecutor(
             cameraAdapter = FakeCameraAdapter(
@@ -47,12 +44,8 @@ class CapturePhotoExecutorTest {
             ),
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = codec,
                 clock = clock,
-                frameSender = EncodedLocalFrameSender { frameBytes ->
-                    val decoded = codec.decode(frameBytes)
-                    chunkFrames += decoded.header to decoded.body
-                },
+                frameSender = GlassesFrameSender { header, body -> chunkFrames += header to body },
                 chunkSizeBytes = 4,
             ),
             clock = clock,
@@ -97,7 +90,6 @@ class CapturePhotoExecutorTest {
         val commandFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
         val chunkFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
         val clock = FakeClock(1_717_180_200L)
-        val codec = DefaultLocalFrameCodec()
         val executor = CapturePhotoExecutor(
             cameraAdapter = FakeCameraAdapter(
                 failure = CameraCaptureException(
@@ -107,12 +99,8 @@ class CapturePhotoExecutorTest {
             ),
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = codec,
                 clock = clock,
-                frameSender = EncodedLocalFrameSender { frameBytes ->
-                    val decoded = codec.decode(frameBytes)
-                    chunkFrames += decoded.header to decoded.body
-                },
+                frameSender = GlassesFrameSender { header, body -> chunkFrames += header to body },
             ),
             clock = clock,
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
@@ -133,7 +121,6 @@ class CapturePhotoExecutorTest {
         val commandFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
         val chunkFrames = mutableListOf<Pair<LocalFrameHeader<*>, ByteArray?>>()
         val clock = FakeClock(1_717_180_300L)
-        val codec = DefaultLocalFrameCodec()
         val executor = CapturePhotoExecutor(
             cameraAdapter = FakeCameraAdapter(
                 result = CameraCapture(
@@ -144,12 +131,8 @@ class CapturePhotoExecutorTest {
             ),
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = codec,
                 clock = clock,
-                frameSender = EncodedLocalFrameSender { frameBytes ->
-                    val decoded = codec.decode(frameBytes)
-                    chunkFrames += decoded.header to decoded.body
-                },
+                frameSender = GlassesFrameSender { header, body -> chunkFrames += header to body },
             ),
             clock = clock,
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
@@ -181,9 +164,8 @@ class CapturePhotoExecutorTest {
             ),
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = DefaultLocalFrameCodec(),
                 clock = clock,
-                frameSender = EncodedLocalFrameSender { throw IllegalStateException("link write failed") },
+                frameSender = GlassesFrameSender { _, _ -> throw IllegalStateException("link write failed") },
             ),
             clock = clock,
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
@@ -207,9 +189,8 @@ class CapturePhotoExecutorTest {
             },
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = DefaultLocalFrameCodec(),
                 clock = FakeClock(1_717_180_500L),
-                frameSender = EncodedLocalFrameSender { },
+                frameSender = GlassesFrameSender { _, _ -> },
             ),
             clock = FakeClock(1_717_180_500L),
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
@@ -232,9 +213,8 @@ class CapturePhotoExecutorTest {
             },
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = DefaultLocalFrameCodec(),
                 clock = FakeClock(1_717_180_600L),
-                frameSender = EncodedLocalFrameSender { },
+                frameSender = GlassesFrameSender { _, _ -> },
             ),
             clock = FakeClock(1_717_180_600L),
             frameSender = GlassesFrameSender { _, _ -> },
