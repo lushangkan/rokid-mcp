@@ -11,10 +11,8 @@ import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
 import cn.cutemc.rokidmcp.glasses.renderer.AppStateTextRenderer
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
-import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -96,19 +94,14 @@ internal fun createActiveGlassesGatewayComposition(
     transport: RfcommServerTransport = AndroidRfcommServerTransport(),
     clock: Clock = SystemClock,
 ): ActiveGlassesGatewayComposition {
-    val localCodec = DefaultLocalFrameCodec()
     val controller = GlassesAppController(app.runtimeStore)
     val frameSender = GlassesFrameSender { header, body -> transport.send(header, body) }
     val captureExecutor = CapturePhotoExecutor(
         cameraAdapter = cameraAdapter,
         checksumCalculator = ChecksumCalculator(),
         imageChunkSender = ImageChunkSender(
-            codec = localCodec,
             clock = clock,
-            frameSender = EncodedLocalFrameSender { frameBytes ->
-                val decoded = localCodec.decode(frameBytes)
-                transport.send(decoded.header, decoded.body)
-            },
+            frameSender = frameSender,
         ),
         clock = clock,
         frameSender = frameSender,
