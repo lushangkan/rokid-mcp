@@ -21,7 +21,6 @@ describe("DeviceSessionManager", () => {
     expect(status.device.sessionState).toBe("OFFLINE");
     expect(status.device.setupState).toBe("UNINITIALIZED");
     expect(status.device.runtimeState).toBe("DISCONNECTED");
-    expect(status.device.uplinkState).toBe("OFFLINE");
     expect(status.device.capabilities).toEqual([]);
     expect(status.device.activeCommandRequestId).toBeNull();
     expect(status.device.lastErrorCode).toBeNull();
@@ -39,7 +38,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -51,7 +49,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
-        uplinkState: "ONLINE",
         capabilities: ["capture_photo"],
       },
     });
@@ -77,7 +74,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -88,7 +84,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         capabilities: ["capture_photo"],
       },
     });
@@ -118,7 +113,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -129,7 +123,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text", "capture_photo"],
       },
     });
@@ -151,7 +144,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -162,7 +154,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["capture_photo"],
       },
     });
@@ -173,7 +164,6 @@ describe("DeviceSessionManager", () => {
       socketId: "socket-heartbeat-old",
       payload: {
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         activeCommandRequestId: "cmd_old",
       },
     });
@@ -186,7 +176,6 @@ describe("DeviceSessionManager", () => {
     expect(oldStatus.device.sessionId).toBeNull();
     expect(newStatus.device.sessionId).toBe(newSessionId);
     expect(newStatus.device.runtimeState).toBe("READY");
-    expect(newStatus.device.uplinkState).toBe("ONLINE");
     expect(newStatus.device.activeCommandRequestId).toBeNull();
   });
 
@@ -199,7 +188,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -210,7 +198,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["capture_photo"],
       },
     });
@@ -222,7 +209,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         activeCommandRequestId: "cmd_old",
         lastErrorCode: "OLD_ERR",
         lastErrorMessage: "old device update",
@@ -237,7 +223,6 @@ describe("DeviceSessionManager", () => {
     expect(oldStatus.device.sessionId).toBeNull();
     expect(newStatus.device.sessionId).toBe(newSessionId);
     expect(newStatus.device.runtimeState).toBe("READY");
-    expect(newStatus.device.uplinkState).toBe("ONLINE");
     expect(newStatus.device.activeCommandRequestId).toBeNull();
     expect(newStatus.device.lastErrorCode).toBeNull();
     expect(newStatus.device.lastErrorMessage).toBeNull();
@@ -254,7 +239,6 @@ describe("DeviceSessionManager", () => {
         payload: {
           setupState: "INITIALIZED",
           runtimeState: "READY",
-          uplinkState: "ONLINE",
           capabilities: ["display_text"],
         },
       });
@@ -266,7 +250,6 @@ describe("DeviceSessionManager", () => {
       expect(status.device.connected).toBe(false);
       expect(status.device.sessionState).toBe("STALE");
       expect(status.device.runtimeState).toBe("DISCONNECTED");
-      expect(status.device.uplinkState).toBe("OFFLINE");
       expect(status.device.activeCommandRequestId).toBeNull();
     } finally {
       manager.stopCleanupJob();
@@ -282,7 +265,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -303,7 +285,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -314,7 +295,6 @@ describe("DeviceSessionManager", () => {
     expect(status.device.connected).toBe(false);
     expect(status.device.sessionState).toBe("CLOSED");
     expect(status.device.runtimeState).toBe("DISCONNECTED");
-    expect(status.device.uplinkState).toBe("OFFLINE");
     expect(status.device.activeCommandRequestId).toBeNull();
   });
 
@@ -327,7 +307,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -339,7 +318,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         activeCommandRequestId: null,
       },
     });
@@ -348,7 +326,6 @@ describe("DeviceSessionManager", () => {
 
     const status = manager.getCurrentDeviceStatus("device-fallback");
     expect(status.device.runtimeState).toBe("BUSY");
-    expect(status.device.uplinkState).toBe("ERROR");
   });
 
   test("heartbeat keeps session fallback runtime fields consistent", () => {
@@ -360,7 +337,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -371,7 +347,6 @@ describe("DeviceSessionManager", () => {
       socketId: "socket-heartbeat-fallback",
       payload: {
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         activeCommandRequestId: "cmd_123",
       },
     });
@@ -380,7 +355,6 @@ describe("DeviceSessionManager", () => {
 
     const status = manager.getCurrentDeviceStatus("device-heartbeat-fallback");
     expect(status.device.runtimeState).toBe("BUSY");
-    expect(status.device.uplinkState).toBe("ERROR");
     expect(status.device.activeCommandRequestId).toBe("cmd_123");
   });
 
@@ -393,7 +367,6 @@ describe("DeviceSessionManager", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         capabilities: ["display_text"],
       },
     });
@@ -409,7 +382,6 @@ describe("DeviceSessionManager", () => {
       socketId: "socket-server-time",
       payload: {
         runtimeState: "BUSY",
-        uplinkState: "ERROR",
         activeCommandRequestId: null,
       },
     });

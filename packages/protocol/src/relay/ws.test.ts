@@ -29,7 +29,6 @@ describe("relay ws schema", () => {
         phoneInfo: {},
         setupState: "INITIALIZED",
         runtimeState: "CONNECTING",
-        uplinkState: "CONNECTING",
         capabilities: ["display_text"],
       },
     };
@@ -48,7 +47,6 @@ describe("relay ws schema", () => {
       payload: {
         seq: 1,
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         pendingCommandCount: 0,
         activeCommandRequestId: null,
       },
@@ -68,7 +66,6 @@ describe("relay ws schema", () => {
       payload: {
         seq: 1.5,
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         pendingCommandCount: 0.1,
         activeCommandRequestId: null,
       },
@@ -89,7 +86,6 @@ describe("relay ws schema", () => {
         phoneInfo: {},
         setupState: "INITIALIZED",
         runtimeState: "CONNECTING",
-        uplinkState: "CONNECTING",
         capabilities: ["display_text"],
       },
     };
@@ -105,7 +101,6 @@ describe("relay ws schema", () => {
         phoneInfo: {},
         setupState: "INITIALIZED",
         runtimeState: "CONNECTING",
-        uplinkState: "CONNECTING",
         capabilities: ["display_text"],
       },
     };
@@ -127,7 +122,6 @@ describe("relay ws schema", () => {
         phoneInfo: {},
         setupState: "INITIALIZED",
         runtimeState: "CONNECTING",
-        uplinkState: "CONNECTING",
         capabilities: ["display_text"],
       },
     };
@@ -145,7 +139,6 @@ describe("relay ws schema", () => {
       payload: {
         setupState: "INITIALIZED",
         runtimeState: "READY",
-        uplinkState: "ONLINE",
         lastErrorCode: null,
         lastErrorMessage: null,
         activeCommandRequestId: null,
@@ -154,6 +147,26 @@ describe("relay ws schema", () => {
 
     expect(Value.Check(RelayPhoneStateUpdateMessageSchema, message)).toBe(true);
     expect(Value.Check(RelayDeviceInboundMessageSchema, message)).toBe(true);
+  });
+
+  test("rejects legacy uplinkState in hello payload", () => {
+    const message = {
+      version: "1.0",
+      type: "hello",
+      deviceId: "rokid_glasses_01",
+      timestamp: 1710000000000,
+      payload: {
+        authToken: "dev_token_xxx",
+        appVersion: "0.1.0",
+        phoneInfo: {},
+        setupState: "INITIALIZED",
+        runtimeState: "CONNECTING",
+        uplinkState: "CONNECTING",
+        capabilities: ["display_text"],
+      },
+    };
+
+    expect(Value.Check(RelayHelloMessageSchema, message)).toBe(false);
   });
 
   test("rejects hello_ack from inbound union", () => {

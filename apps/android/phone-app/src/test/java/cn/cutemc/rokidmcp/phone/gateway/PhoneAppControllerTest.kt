@@ -743,6 +743,11 @@ class PhoneAppControllerTest {
         runCurrent()
         assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
 
+        runtimeStore.replace(runtimeStore.snapshot.value.copy(uplinkState = PhoneUplinkState.ONLINE))
+        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+        runCurrent()
+        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+
         runtimeStore.replace(runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_SAMPLE"))
         controller.reportSnapshotForTest(runtimeStore.snapshot.value)
         runCurrent()

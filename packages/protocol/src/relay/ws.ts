@@ -19,7 +19,6 @@ import {
   TimestampSchema,
   TerminalErrorSchema,
   TransferIdSchema,
-  UplinkStateSchema,
   UploadTokenSchema,
 } from "../common/index.js";
 import {
@@ -67,7 +66,6 @@ export const RelayHelloPayloadSchema = Type.Object(
     phoneInfo: PhoneInfoSchema,
     setupState: SetupStateSchema,
     runtimeState: RuntimeStateSchema,
-    uplinkState: Type.Union([Type.Literal("CONNECTING"), Type.Literal("ONLINE")]),
     capabilities: RelayHelloCapabilitiesSchema,
     targetGlasses: Type.Optional(TargetGlassesSchema),
     relayConfig: Type.Optional(RelayConfigSchema),
@@ -90,7 +88,6 @@ export const RelayHeartbeatPayloadSchema = Type.Object(
   {
     seq: Type.Integer({ minimum: 0 }),
     runtimeState: RuntimeStateSchema,
-    uplinkState: Type.Union([Type.Literal("ONLINE"), Type.Literal("ERROR")]),
     pendingCommandCount: Type.Integer({ minimum: 0, maximum: GLOBAL_ACTIVE_COMMAND_LIMIT }),
     activeCommandRequestId: Type.Union([RequestIdSchema, Type.Null()]),
   },
@@ -113,7 +110,6 @@ export const RelayPhoneStateUpdatePayloadSchema = Type.Object(
   {
     setupState: SetupStateSchema,
     runtimeState: RuntimeStateSchema,
-    uplinkState: UplinkStateSchema,
     lastErrorCode: Type.Optional(NullableStringSchema),
     lastErrorMessage: Type.Optional(NullableStringSchema),
     activeCommandRequestId: Type.Optional(Type.Union([RequestIdSchema, Type.Null()])),

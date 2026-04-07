@@ -102,7 +102,6 @@ function helloMessage(deviceId = "device-a") {
       phoneInfo: { model: "pixel" },
       setupState: "INITIALIZED",
       runtimeState: "READY",
-      uplinkState: "ONLINE",
       capabilities: ["display_text"],
     },
   });
@@ -112,7 +111,6 @@ function heartbeatMessage(args: {
   deviceId?: string;
   sessionId: string;
   runtimeState?: string;
-  uplinkState?: string;
   activeCommandRequestId?: string | null;
 }) {
   return JSON.stringify({
@@ -124,7 +122,6 @@ function heartbeatMessage(args: {
     payload: {
       seq: 1,
       runtimeState: args.runtimeState ?? "BUSY",
-      uplinkState: args.uplinkState ?? "ERROR",
       pendingCommandCount: 0,
       activeCommandRequestId: args.activeCommandRequestId ?? "cmd-1",
     },
@@ -135,7 +132,6 @@ function phoneStateUpdateMessage(args: {
   deviceId?: string;
   sessionId: string;
   runtimeState?: string;
-  uplinkState?: string;
 }) {
   return JSON.stringify({
     version: PROTOCOL_VERSION,
@@ -146,7 +142,6 @@ function phoneStateUpdateMessage(args: {
     payload: {
       setupState: "INITIALIZED",
       runtimeState: args.runtimeState ?? "BUSY",
-      uplinkState: args.uplinkState ?? "ERROR",
       activeCommandRequestId: null,
       lastErrorCode: "PHONE_ERR",
       lastErrorMessage: "runtime updated",
@@ -446,7 +441,7 @@ describe("device websocket handlers", () => {
     expect(socket.closeCalls).toEqual([1003]);
   });
 
-  test("invalid schema closes connection", () => {
+  test("hello with legacy uplinkState closes connection", () => {
     const handlers = createHandlers();
     const socket = createSocket();
 
@@ -463,7 +458,65 @@ describe("device websocket handlers", () => {
           phoneInfo: { model: "pixel" },
           setupState: "INITIALIZED",
           runtimeState: "READY",
+          capabilities: ["display_text"],
           uplinkState: "ONLINE",
+        },
+      }),
+    );
+
+    expect(socket.closeCalls).toEqual([1008]);
+  });
+
+  test("heartbeat with legacy uplinkState closes connection", () => {
+    const handlers = createHandlers();
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    const ack = socket.sent[0] as { payload: { sessionId: string } };
+
+    handlers.message(
+      socket,
+      JSON.stringify({
+        version: PROTOCOL_VERSION,
+        type: "heartbeat",
+        deviceId: "device-a",
+        sessionId: ack.payload.sessionId,
+        timestamp: Date.now(),
+        payload: {
+          seq: 1,
+          runtimeState: "READY",
+          uplinkState: "ONLINE",
+          pendingCommandCount: 0,
+          activeCommandRequestId: null,
+        },
+      }),
+    );
+
+    expect(socket.closeCalls).toEqual([1008]);
+  });
+
+  test("phone_state_update with legacy uplinkState closes connection", () => {
+    const handlers = createHandlers();
+    const socket = createSocket();
+
+    handlers.message(socket, helloMessage("device-a"));
+    const ack = socket.sent[0] as { payload: { sessionId: string } };
+
+    handlers.message(
+      socket,
+      JSON.stringify({
+        version: PROTOCOL_VERSION,
+        type: "phone_state_update",
+        deviceId: "device-a",
+        sessionId: ack.payload.sessionId,
+        timestamp: Date.now(),
+        payload: {
+          setupState: "INITIALIZED",
+          runtimeState: "BUSY",
+          uplinkState: "ERROR",
+          activeCommandRequestId: null,
+          lastErrorCode: null,
+          lastErrorMessage: null,
         },
       }),
     );
@@ -485,7 +538,6 @@ describe("device websocket handlers", () => {
 
     expect(socket.sent).toHaveLength(1);
     expect(status.device.runtimeState).toBe("BUSY");
-    expect(status.device.uplinkState).toBe("ERROR");
     expect(status.device.lastErrorCode).toBe("PHONE_ERR");
   });
 
@@ -560,7 +612,6 @@ describe("device websocket handlers", () => {
       deviceId: "device-old",
       sessionId: oldAck.payload.sessionId,
       runtimeState: "BUSY",
-      uplinkState: "ERROR",
     }));
 
     const oldStatus = manager.getCurrentDeviceStatus("device-old");
@@ -569,7 +620,6 @@ describe("device websocket handlers", () => {
     expect(oldSocket.closeCalls).toEqual([1008]);
     expect(oldStatus.device.sessionState).toBe("OFFLINE");
     expect(newStatus.device.runtimeState).toBe("READY");
-    expect(newStatus.device.uplinkState).toBe("ONLINE");
   });
 
   test("old socket late phone_state_update after replacement does not pollute current singleton", () => {
@@ -586,7 +636,6 @@ describe("device websocket handlers", () => {
       deviceId: "device-old",
       sessionId: oldAck.payload.sessionId,
       runtimeState: "BUSY",
-      uplinkState: "ERROR",
     }));
 
     const oldStatus = manager.getCurrentDeviceStatus("device-old");

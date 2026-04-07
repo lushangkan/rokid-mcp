@@ -92,7 +92,7 @@ class RelaySessionClientTest {
         assertTrue(hello.contains("\"deviceId\":\"device-from-config\""))
         assertTrue(hello.contains("\"authToken\":\"auth-from-config\""))
         assertTrue(hello.contains("\"appVersion\":\"9.9.9\""))
-        assertTrue(hello.contains("\"uplinkState\":\"CONNECTING\""))
+        assertFalse(hello.contains("\"uplinkState\""))
         assertTrue(hello.contains("\"capabilities\":[\"display_text\"]"))
         assertFalse(hello.contains("capture_photo"))
     }
@@ -344,6 +344,28 @@ class RelaySessionClientTest {
 
         val first = runtimeStore.snapshot.value.copy(lastSeenAt = 10L)
         val second = runtimeStore.snapshot.value.copy(lastSeenAt = 20L)
+
+        assertFalse(controller.shouldReportSnapshotForTest(first, second))
+    }
+
+    @Test
+    fun `report if needed ignores uplink-only changes`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "abc12345",
+                    authToken = "token",
+                    relayBaseUrl = "http://10.0.2.2:3000",
+                    appVersion = "1.0",
+                )
+            },
+        )
+
+        val first = runtimeStore.snapshot.value.copy(uplinkState = PhoneUplinkState.CONNECTING)
+        val second = runtimeStore.snapshot.value.copy(uplinkState = PhoneUplinkState.ONLINE)
 
         assertFalse(controller.shouldReportSnapshotForTest(first, second))
     }

@@ -4,7 +4,6 @@ import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import cn.cutemc.rokidmcp.share.protocol.constants.RelayProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.constants.RuntimeState
 import cn.cutemc.rokidmcp.share.protocol.constants.SetupState
-import cn.cutemc.rokidmcp.share.protocol.constants.UplinkState
 import cn.cutemc.rokidmcp.share.protocol.relay.CommandAckMessage
 import cn.cutemc.rokidmcp.share.protocol.relay.CommandAckPayload
 import cn.cutemc.rokidmcp.share.protocol.relay.CommandCancelMessage
@@ -196,7 +195,6 @@ class RelaySessionClient(
                         phoneInfo = RelayPhoneInfo(),
                         setupState = snapshot.setupState.toRelaySetupState(),
                         runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
-                        uplinkState = snapshot.uplinkState.toRelayUplinkState(),
                         capabilities = supportedActions,
                     ),
                 ),
@@ -298,7 +296,6 @@ class RelaySessionClient(
                     payload = RelayHeartbeatPayload(
                         seq = heartbeatSeq++,
                         runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
-                        uplinkState = snapshot.uplinkState.toRelayUplinkState(),
                         pendingCommandCount = 0,
                         activeCommandRequestId = snapshot.activeCommandRequestId,
                     ),
@@ -320,7 +317,6 @@ class RelaySessionClient(
                     payload = RelayPhoneStateUpdatePayload(
                         setupState = snapshot.setupState.toRelaySetupState(),
                         runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
-                        uplinkState = snapshot.uplinkState.toRelayUplinkState(),
                         lastErrorCode = snapshot.lastErrorCode,
                         lastErrorMessage = snapshot.lastErrorMessage,
                         activeCommandRequestId = snapshot.activeCommandRequestId,
@@ -435,15 +431,6 @@ class RelaySessionClient(
             PhoneRuntimeState.READY -> RuntimeState.READY
             PhoneRuntimeState.BUSY -> RuntimeState.BUSY
             PhoneRuntimeState.ERROR -> RuntimeState.ERROR
-        }
-    }
-
-    private fun PhoneUplinkState.toRelayUplinkState(): UplinkState {
-        return when (this) {
-            PhoneUplinkState.OFFLINE -> UplinkState.OFFLINE
-            PhoneUplinkState.CONNECTING -> UplinkState.CONNECTING
-            PhoneUplinkState.ONLINE -> UplinkState.ONLINE
-            PhoneUplinkState.ERROR -> UplinkState.ERROR
         }
     }
 
