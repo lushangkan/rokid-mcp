@@ -1,11 +1,22 @@
 package cn.cutemc.rokidmcp.integration
 
+import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
+import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
+import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
+import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
+import cn.cutemc.rokidmcp.glasses.gateway.CommandDispatcher
+import cn.cutemc.rokidmcp.glasses.gateway.ExclusiveExecutionGuard
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesAppController
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesLocalLinkSession
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesRuntimeStore
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportEvent
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesTransportState
 import cn.cutemc.rokidmcp.glasses.gateway.RfcommServerTransport
+import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
+import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.phone.gateway.PhoneHelloConfig
 import cn.cutemc.rokidmcp.phone.gateway.PhoneLocalLinkSession
 import cn.cutemc.rokidmcp.phone.gateway.PhoneLocalSessionEvent
@@ -52,6 +63,7 @@ class PhoneGlassesLoopbackTest {
             controller = GlassesAppController(GlassesRuntimeStore()),
             clock = GlassesTestClock(1_717_172_100L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, pair.server, GlassesTestClock(1_717_172_100L)),
         )
 
         phoneSession.start(targetDeviceAddress = "00:11:22:33:44:55")
@@ -86,6 +98,7 @@ class PhoneGlassesLoopbackTest {
             controller = GlassesAppController(GlassesRuntimeStore()),
             clock = GlassesTestClock(1_717_172_200L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, pair.server, GlassesTestClock(1_717_172_200L)),
         )
 
         phoneSession.start(targetDeviceAddress = "00:11:22:33:44:55")
@@ -107,6 +120,41 @@ class PhoneGlassesLoopbackTest {
         deviceId = "abc12345",
         appVersion = "1.0",
         supportedActions = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
+    )
+
+    private fun testCommandDispatcher(
+        scope: kotlinx.coroutines.CoroutineScope,
+        transport: RfcommServerTransport,
+        clock: GlassesTestClock,
+    ) = CommandDispatcher(
+        clock = clock,
+        scope = scope,
+        frameSender = GlassesFrameSender(transport::send),
+        exclusiveGuard = ExclusiveExecutionGuard(),
+        displayTextExecutor = DisplayTextExecutor(
+            textRenderer = TextRenderer { _, _ -> Unit },
+            clock = clock,
+        ),
+        capturePhotoExecutor = CapturePhotoExecutor(
+            cameraAdapter = object : CameraAdapter {
+                override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) = CameraCapture(
+                    bytes = "jpeg-loopback".encodeToByteArray(),
+                    width = 640,
+                    height = 480,
+                )
+            },
+            checksumCalculator = ChecksumCalculator(),
+            imageChunkSender = ImageChunkSender(
+                codec = DefaultLocalFrameCodec(),
+                clock = clock,
+                frameSender = EncodedLocalFrameSender { frameBytes ->
+                    val decoded = DefaultLocalFrameCodec().decode(frameBytes)
+                    transport.send(decoded.header, decoded.body)
+                },
+            ),
+            clock = clock,
+            frameSender = GlassesFrameSender(transport::send),
+        ),
     )
 }
 
