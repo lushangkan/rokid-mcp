@@ -9,3 +9,7 @@ bun.lockb
 # TypeScript build outputs
 dist/
 *.tsbuildinfo
+
+**/.kotlin
+.sisyphus
+**/.idea
