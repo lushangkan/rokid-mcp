@@ -8,7 +8,6 @@ import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
@@ -383,12 +382,8 @@ class GlassesLocalLinkSessionTest {
             },
             checksumCalculator = ChecksumCalculator(),
             imageChunkSender = ImageChunkSender(
-                codec = DefaultLocalFrameCodec(),
                 clock = clock,
-                frameSender = EncodedLocalFrameSender { frameBytes ->
-                    val decoded = DefaultLocalFrameCodec().decode(frameBytes)
-                    transport.send(decoded.header, decoded.body)
-                },
+                frameSender = GlassesFrameSender(transport::send),
                 chunkSizeBytes = 4,
             ),
             clock = clock,
@@ -410,12 +405,8 @@ class GlassesLocalLinkSessionTest {
         },
         checksumCalculator = ChecksumCalculator(),
         imageChunkSender = ImageChunkSender(
-            codec = DefaultLocalFrameCodec(),
             clock = clock,
-            frameSender = EncodedLocalFrameSender { frameBytes ->
-                val decoded = DefaultLocalFrameCodec().decode(frameBytes)
-                transport.send(decoded.header, decoded.body)
-            },
+            frameSender = GlassesFrameSender(transport::send),
         ),
         clock = clock,
         frameSender = GlassesFrameSender(transport::send),

@@ -6,10 +6,8 @@ import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
-import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
-import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.CommandError
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
@@ -154,9 +152,8 @@ class CommandDispatcherTest {
         },
         checksumCalculator = ChecksumCalculator(),
         imageChunkSender = ImageChunkSender(
-            codec = DefaultLocalFrameCodec(),
             clock = FakeClock(1_717_191_000L),
-            frameSender = EncodedLocalFrameSender { },
+            frameSender = GlassesFrameSender { _, _ -> },
         ),
         clock = FakeClock(1_717_191_000L),
         frameSender = GlassesFrameSender { _, _ -> },
