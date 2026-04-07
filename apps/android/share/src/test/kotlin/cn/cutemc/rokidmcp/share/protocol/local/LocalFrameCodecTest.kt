@@ -4,7 +4,9 @@ import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
 import org.junit.Test
+import kotlinx.serialization.SerializationException
 
 class LocalFrameCodecTest {
     private val codec = DefaultLocalFrameCodec()
@@ -151,6 +153,28 @@ class LocalFrameCodecTest {
         assertEquals(LocalMessageType.PONG, header.type)
         assertEquals(42L, header.payload.seq)
         assertEquals("pong-nonce", header.payload.nonce)
+    }
+
+    @Test
+    fun `local protocol json rejects unknown display text fields`() {
+        try {
+            LocalProtocolJson.default.decodeFromString(
+                DisplayTextCommand.serializer(),
+                """
+                {
+                  "action": "display_text",
+                  "timeoutMs": 30000,
+                  "params": {
+                    "text": "hello glasses",
+                    "durationMs": 3000,
+                    "style": "warning"
+                  }
+                }
+                """.trimIndent(),
+            )
+            fail("Expected unknown display_text fields to be rejected")
+        } catch (_: SerializationException) {
+        }
     }
 
     @Test(expected = ProtocolCodecException::class)
