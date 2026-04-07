@@ -86,6 +86,41 @@ class CommandDispatcherTest {
         assertEquals(LocalMessageType.COMMAND_RESULT, frames.last().type)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `dispatcher reports displaying before a blocking renderer completes`() = runTest {
+        val frames = mutableListOf<LocalFrameHeader<*>>()
+        val gate = CompletableDeferred<Unit>()
+        val dispatcher = CommandDispatcher(
+            clock = FakeClock(1_717_191_300L),
+            scope = backgroundScope,
+            frameSender = GlassesFrameSender { header, _ -> frames += header },
+            exclusiveGuard = ExclusiveExecutionGuard(),
+            displayTextExecutor = DisplayTextExecutor(
+                textRenderer = TextRenderer { _, _ -> gate.await() },
+                clock = FakeClock(1_717_191_300L),
+            ),
+        )
+
+        dispatcher.handleCommand(displayCommand("req_display_3"))
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                LocalMessageType.COMMAND_ACK,
+                LocalMessageType.COMMAND_STATUS,
+                LocalMessageType.COMMAND_STATUS,
+            ),
+            frames.map { it.type },
+        )
+        assertTrue(frames[2].payload is DisplayingCommandStatus)
+
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(LocalMessageType.COMMAND_RESULT, frames.last().type)
+    }
+
     private fun displayCommand(requestId: String) = LocalFrameHeader(
         type = LocalMessageType.COMMAND,
         requestId = requestId,
