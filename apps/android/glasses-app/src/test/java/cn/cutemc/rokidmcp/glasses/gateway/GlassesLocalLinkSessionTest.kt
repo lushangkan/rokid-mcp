@@ -6,19 +6,17 @@ import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
+import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
+import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
 import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
-import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoResult
 import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
-import cn.cutemc.rokidmcp.share.protocol.local.CommandError
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
-import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
 import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
@@ -46,6 +44,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_171_800L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_171_800L)),
         )
 
         session.start()
@@ -70,7 +69,7 @@ class GlassesLocalLinkSessionTest {
         assertEquals(LocalMessageType.HELLO_ACK, helloAck.type)
         assertTrue((helloAck.payload as HelloAckPayload).accepted)
         assertEquals(
-            emptyList<CommandAction>(),
+            listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
             (helloAck.payload as HelloAckPayload).capabilities,
         )
         assertEquals(Build.MODEL, (helloAck.payload as HelloAckPayload).glassesInfo?.model)
@@ -95,6 +94,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_171_900L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_171_900L)),
         )
 
         session.start()
@@ -130,6 +130,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_172_000L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_000L)),
         )
 
         session.start()
@@ -153,6 +154,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_172_100L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_100L)),
         )
 
         session.start()
@@ -180,6 +182,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_172_200L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_200L)),
         )
 
         session.start()
@@ -203,6 +206,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_172_300L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_300L)),
         )
 
         session.start()
@@ -226,6 +230,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = FakeClock(1_717_172_400L),
             sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_400L)),
         )
 
         session.start()
@@ -256,28 +261,7 @@ class GlassesLocalLinkSessionTest {
             controller = controller,
             clock = clock,
             sessionScope = backgroundScope,
-            capturePhotoExecutor = CapturePhotoExecutor(
-                cameraAdapter = object : CameraAdapter {
-                    override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
-                        CameraCapture(
-                            bytes = "jpeg-session".encodeToByteArray(),
-                            width = 800,
-                            height = 600,
-                        )
-                },
-                checksumCalculator = ChecksumCalculator(),
-                imageChunkSender = ImageChunkSender(
-                    codec = DefaultLocalFrameCodec(),
-                    clock = clock,
-                    frameSender = EncodedLocalFrameSender { frameBytes ->
-                        val decoded = DefaultLocalFrameCodec().decode(frameBytes)
-                        transport.send(decoded.header, decoded.body)
-                    },
-                    chunkSizeBytes = 4,
-                ),
-                clock = clock,
-                frameSender = GlassesFrameSender(transport::send),
-            ),
+            commandDispatcher = captureAwareCommandDispatcher(backgroundScope, transport, clock),
         )
 
         session.start()
@@ -315,46 +299,6 @@ class GlassesLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `display text command falls back to unsupported error without dispatcher`() = runTest {
-        val transport = FakeRfcommServerTransport()
-        val session = GlassesLocalLinkSession(
-            transport = transport,
-            controller = GlassesAppController(GlassesRuntimeStore()),
-            clock = FakeClock(1_717_172_500L),
-            sessionScope = backgroundScope,
-        )
-
-        session.start()
-        runCurrent()
-        transport.emit(
-            GlassesTransportEvent.FrameReceived(
-                LocalFrameHeader(
-                    type = LocalMessageType.COMMAND,
-                    requestId = "req_display_1",
-                    timestamp = 1_717_172_501L,
-                    payload = DisplayTextCommand(
-                        timeoutMs = 30_000L,
-                        params = DisplayTextCommandParams(
-                            text = "hello glasses",
-                            durationMs = 3_000L,
-                        ),
-                    ),
-                ),
-            ),
-        )
-        runCurrent()
-
-        assertEquals(LocalMessageType.COMMAND_ERROR, transport.sentFrames.single().header.type)
-        val error = transport.sentFrames.single().header.payload as CommandError
-        assertEquals(CommandAction.DISPLAY_TEXT, error.action)
-        assertEquals(LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL, error.error.code)
-        assertEquals("display_text execution is not available in glasses-app yet", error.error.message)
-
-        session.stop("test complete")
-    }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test
     fun `hello ack capabilities reflect configured dispatcher actions`() = runTest {
         val transport = FakeRfcommServerTransport()
         val session = GlassesLocalLinkSession(
@@ -371,6 +315,7 @@ class GlassesLocalLinkSessionTest {
                     textRenderer = cn.cutemc.rokidmcp.glasses.renderer.TextRenderer { _, _ -> Unit },
                     clock = FakeClock(1_717_172_550L),
                 ),
+                capturePhotoExecutor = testCapturePhotoExecutor(transport, FakeClock(1_717_172_550L)),
             ),
         )
 
@@ -393,8 +338,86 @@ class GlassesLocalLinkSessionTest {
         runCurrent()
 
         val helloAck = transport.sentFrames.single().header.payload as HelloAckPayload
-        assertEquals(listOf(CommandAction.DISPLAY_TEXT), helloAck.capabilities)
+        assertEquals(listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO), helloAck.capabilities)
 
         session.stop("test complete")
     }
+
+    private fun testCommandDispatcher(
+        scope: kotlinx.coroutines.CoroutineScope,
+        transport: FakeRfcommServerTransport,
+        clock: FakeClock,
+    ) = CommandDispatcher(
+        clock = clock,
+        scope = scope,
+        frameSender = GlassesFrameSender(transport::send),
+        exclusiveGuard = ExclusiveExecutionGuard(),
+        displayTextExecutor = DisplayTextExecutor(
+            textRenderer = TextRenderer { _, _ -> Unit },
+            clock = clock,
+        ),
+        capturePhotoExecutor = testCapturePhotoExecutor(transport, clock),
+    )
+
+    private fun captureAwareCommandDispatcher(
+        scope: kotlinx.coroutines.CoroutineScope,
+        transport: FakeRfcommServerTransport,
+        clock: FakeClock,
+    ) = CommandDispatcher(
+        clock = clock,
+        scope = scope,
+        frameSender = GlassesFrameSender(transport::send),
+        exclusiveGuard = ExclusiveExecutionGuard(),
+        displayTextExecutor = DisplayTextExecutor(
+            textRenderer = TextRenderer { _, _ -> Unit },
+            clock = clock,
+        ),
+        capturePhotoExecutor = CapturePhotoExecutor(
+            cameraAdapter = object : CameraAdapter {
+                override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
+                    CameraCapture(
+                        bytes = "jpeg-session".encodeToByteArray(),
+                        width = 800,
+                        height = 600,
+                    )
+            },
+            checksumCalculator = ChecksumCalculator(),
+            imageChunkSender = ImageChunkSender(
+                codec = DefaultLocalFrameCodec(),
+                clock = clock,
+                frameSender = EncodedLocalFrameSender { frameBytes ->
+                    val decoded = DefaultLocalFrameCodec().decode(frameBytes)
+                    transport.send(decoded.header, decoded.body)
+                },
+                chunkSizeBytes = 4,
+            ),
+            clock = clock,
+            frameSender = GlassesFrameSender(transport::send),
+        ),
+    )
+
+    private fun testCapturePhotoExecutor(
+        transport: FakeRfcommServerTransport,
+        clock: FakeClock,
+    ) = CapturePhotoExecutor(
+        cameraAdapter = object : CameraAdapter {
+            override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) =
+                CameraCapture(
+                    bytes = "jpeg-capabilities".encodeToByteArray(),
+                    width = 640,
+                    height = 480,
+                )
+        },
+        checksumCalculator = ChecksumCalculator(),
+        imageChunkSender = ImageChunkSender(
+            codec = DefaultLocalFrameCodec(),
+            clock = clock,
+            frameSender = EncodedLocalFrameSender { frameBytes ->
+                val decoded = DefaultLocalFrameCodec().decode(frameBytes)
+                transport.send(decoded.header, decoded.body)
+            },
+        ),
+        clock = clock,
+        frameSender = GlassesFrameSender(transport::send),
+    )
 }

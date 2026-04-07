@@ -1,8 +1,15 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
+import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
+import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
+import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
+import cn.cutemc.rokidmcp.glasses.sender.EncodedLocalFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
+import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.CommandError
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
@@ -34,6 +41,7 @@ class CommandDispatcherTest {
                 textRenderer = TextRenderer { _, _ -> Unit },
                 clock = FakeClock(1_717_191_100L),
             ),
+            capturePhotoExecutor = testCapturePhotoExecutor(),
         )
 
         dispatcher.handleCommand(displayCommand("req_display_1"))
@@ -69,6 +77,7 @@ class CommandDispatcherTest {
                 textRenderer = TextRenderer { _, _ -> gate.await() },
                 clock = FakeClock(1_717_191_200L),
             ),
+            capturePhotoExecutor = testCapturePhotoExecutor(),
         )
 
         dispatcher.handleCommand(displayCommand("req_display_1"))
@@ -100,6 +109,7 @@ class CommandDispatcherTest {
                 textRenderer = TextRenderer { _, _ -> gate.await() },
                 clock = FakeClock(1_717_191_300L),
             ),
+            capturePhotoExecutor = testCapturePhotoExecutor(),
         )
 
         dispatcher.handleCommand(displayCommand("req_display_3"))
@@ -132,5 +142,23 @@ class CommandDispatcherTest {
                 durationMs = 3_000L,
             ),
         ),
+    )
+
+    private fun testCapturePhotoExecutor() = CapturePhotoExecutor(
+        cameraAdapter = object : CameraAdapter {
+            override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) = CameraCapture(
+                bytes = "jpeg-test".encodeToByteArray(),
+                width = 640,
+                height = 480,
+            )
+        },
+        checksumCalculator = ChecksumCalculator(),
+        imageChunkSender = ImageChunkSender(
+            codec = DefaultLocalFrameCodec(),
+            clock = FakeClock(1_717_191_000L),
+            frameSender = EncodedLocalFrameSender { },
+        ),
+        clock = FakeClock(1_717_191_000L),
+        frameSender = GlassesFrameSender { _, _ -> },
     )
 }
