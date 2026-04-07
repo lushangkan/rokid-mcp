@@ -143,7 +143,6 @@ data class DisplayTextCommand(
 data class DisplayTextCommandParams(
     val text: String,
     val durationMs: Long,
-    val priority: String? = null,
 )
 
 @Serializable
