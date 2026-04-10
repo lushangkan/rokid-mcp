@@ -7,6 +7,9 @@ import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import timber.log.Timber
+
+private const val RELAY_COMMAND_TAG = "relay-command"
 
 fun interface LocalFrameSender {
     suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?)
@@ -17,7 +20,24 @@ class LocalCommandForwarder(
     private val sender: LocalFrameSender,
 ) {
     suspend fun forward(command: ActiveRelayCommand) {
+        Timber.tag(RELAY_COMMAND_TAG).i("forwarding local command ${command.toLogContext()}")
         sender.send(command.toLocalFrame(clock.nowMs()), null)
+    }
+}
+
+private fun ActiveRelayCommand.toLogContext(): String = buildString {
+    append("requestId=")
+    append(requestId)
+    append(" action=")
+    append(action)
+    append(" timeoutMs=")
+    append(timeoutMs)
+
+    if (this@toLogContext is ActiveCapturePhotoRelayCommand) {
+        append(" transferId=")
+        append(image.transferId)
+        append(" maxBytes=")
+        append(image.maxSizeBytes)
     }
 }
 

@@ -42,6 +42,8 @@ import timber.log.Timber
 
 typealias RelayCommandRuntimeUpdater = suspend (activeCommandRequestId: String?, errorCode: String?, errorMessage: String?) -> Unit
 
+private const val RELAY_COMMAND_TAG = "relay-command"
+
 class RelayCommandBridge(
     private val relayBaseUrl: String,
     private val deviceId: String,
@@ -108,6 +110,9 @@ class RelayCommandBridge(
         pendingCaptureResult = null
         assembledImage = null
         runtimeUpdater(active.requestId, null, null)
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "received relay command dispatch ${active.toRelayLogContext()}",
+        )
 
         try {
             relaySessionClient.sendCommandAck(
@@ -204,6 +209,9 @@ class RelayCommandBridge(
 
     private suspend fun handleLocalCommandAck(requestId: String, payload: CommandAck) {
         val active = activeCommandRegistry.require(requestId, payload.action)
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "received glasses command ack requestId=$requestId action=${active.action} acceptedAt=${payload.acceptedAt}",
+        )
         relaySessionClient.sendCommandStatus(
             requestId = requestId,
             payload = ExecutingStatus(
@@ -215,6 +223,9 @@ class RelayCommandBridge(
 
     private suspend fun handleLocalCommandStatus(requestId: String, payload: LocalCommandStatus) {
         activeCommandRegistry.require(requestId, payload.action)
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "received glasses command status requestId=$requestId action=${payload.action} status=${payload.logStatusName()}",
+        )
         relaySessionClient.sendCommandStatus(
             requestId = requestId,
             payload = payload.toRelayStatus(),
@@ -225,6 +236,9 @@ class RelayCommandBridge(
         when (payload) {
             is DisplayTextResult -> {
                 activeCommandRegistry.require(requestId, payload.action)
+                Timber.tag(RELAY_COMMAND_TAG).i(
+                    "received glasses command result requestId=$requestId action=${payload.action} completedAt=${payload.completedAt}",
+                )
                 relaySessionClient.sendCommandResult(
                     requestId = requestId,
                     payload = CommandResultPayload(
@@ -240,6 +254,9 @@ class RelayCommandBridge(
 
             is cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoResult -> {
                 activeCommandRegistry.require(requestId, payload.action)
+                Timber.tag(RELAY_COMMAND_TAG).i(
+                    "received glasses command result requestId=$requestId action=${payload.action} completedAt=${payload.completedAt} imageSize=${payload.result.size}",
+                )
                 pendingCaptureResult = payload
                 attemptCaptureUploadCompletion(requestId)
             }
@@ -248,6 +265,9 @@ class RelayCommandBridge(
 
     private suspend fun handleLocalCommandError(requestId: String, payload: CommandError) {
         val active = activeCommandRegistry.require(requestId, payload.action)
+        Timber.tag(RELAY_COMMAND_TAG).w(
+            "received glasses command error requestId=$requestId action=${payload.action} code=${payload.error.code} retryable=${payload.error.retryable}",
+        )
         relaySessionClient.sendCommandError(
             requestId = requestId,
             payload = CommandErrorPayload(
@@ -261,18 +281,26 @@ class RelayCommandBridge(
 
     private fun handleChunkStart(requestId: String, transferId: String?, payload: ChunkStart) {
         val active = activeCommandRegistry.require(requestId, CommandAction.CAPTURE_PHOTO) as ActiveCapturePhotoRelayCommand
+        val resolvedTransferId = requireTransferId(transferId)
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "received image chunk transfer start requestId=${active.requestId} transferId=$resolvedTransferId totalSize=${payload.totalSize}",
+        )
         incomingImageAssembler.start(
             requestId = active.requestId,
-            transferId = requireTransferId(transferId),
+            transferId = resolvedTransferId,
             payload = payload,
         )
     }
 
     private fun handleChunkData(requestId: String, transferId: String?, payload: ChunkData, body: ByteArray) {
         activeCommandRegistry.require(requestId, CommandAction.CAPTURE_PHOTO)
+        val resolvedTransferId = requireTransferId(transferId)
+        Timber.tag(RELAY_COMMAND_TAG).v(
+            "received image chunk data requestId=$requestId transferId=$resolvedTransferId chunkIndex=${payload.index} chunkSize=${payload.size} chunkOffset=${payload.offset}",
+        )
         incomingImageAssembler.append(
             requestId = requestId,
-            transferId = requireTransferId(transferId),
+            transferId = resolvedTransferId,
             payload = payload,
             body = body,
         )
@@ -280,9 +308,13 @@ class RelayCommandBridge(
 
     private suspend fun handleChunkEnd(requestId: String, transferId: String?, payload: ChunkEnd) {
         activeCommandRegistry.require(requestId, CommandAction.CAPTURE_PHOTO)
+        val resolvedTransferId = requireTransferId(transferId)
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "received image chunk transfer end requestId=$requestId transferId=$resolvedTransferId totalChunks=${payload.totalChunks} totalSize=${payload.totalSize}",
+        )
         assembledImage = incomingImageAssembler.finish(
             requestId = requestId,
-            transferId = requireTransferId(transferId),
+            transferId = resolvedTransferId,
             payload = payload,
         )
         attemptCaptureUploadCompletion(requestId)
@@ -302,6 +334,9 @@ class RelayCommandBridge(
         )
 
         val uploadStartedAt = clock.nowMs()
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "triggering relay image upload requestId=$requestId transferId=${active.image.transferId} imageId=${active.image.imageId} size=${image.size}",
+        )
         relaySessionClient.sendCommandStatus(
             requestId = requestId,
             payload = UploadingImageStatus(
@@ -335,6 +370,9 @@ class RelayCommandBridge(
                     sha256 = uploadResponse.image.sha256 ?: image.sha256,
                 ),
             ),
+        )
+        Timber.tag(RELAY_COMMAND_TAG).i(
+            "completed relay image upload requestId=$requestId transferId=${active.image.transferId} imageId=${uploadResponse.image.imageId} uploadedAt=${uploadResponse.image.uploadedAt}",
         )
         relaySessionClient.sendCommandResult(
             requestId = requestId,
@@ -438,6 +476,28 @@ private fun ActiveCommandRegistryException.toTerminalError(retryable: Boolean): 
         put("localCode", JsonPrimitive(code))
     },
 )
+
+private fun ActiveRelayCommand.toRelayLogContext(): String = buildString {
+    append("requestId=")
+    append(requestId)
+    append(" action=")
+    append(action)
+    append(" timeoutMs=")
+    append(timeoutMs)
+
+    if (this@toRelayLogContext is ActiveCapturePhotoRelayCommand) {
+        append(" transferId=")
+        append(image.transferId)
+        append(" imageId=")
+        append(image.imageId)
+    }
+}
+
+private fun LocalCommandStatus.logStatusName(): String = when (this) {
+    is ExecutingCommandStatus -> "executing"
+    is DisplayingCommandStatus -> "displaying"
+    is CapturingCommandStatus -> "capturing"
+}
 
 private fun String.toTerminalErrorCode(): TerminalErrorCode = when (this) {
     LocalProtocolErrorCodes.IMAGE_CHECKSUM_MISMATCH -> TerminalErrorCode.CHECKSUM_MISMATCH
