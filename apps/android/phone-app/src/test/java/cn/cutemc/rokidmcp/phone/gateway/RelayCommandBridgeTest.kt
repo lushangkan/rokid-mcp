@@ -270,8 +270,45 @@ class RelayCommandBridgeTest {
         assertTrue(webSocket.sentTexts.any { it.contains("\"type\":\"command_error\"") })
         assertTrue(webSocket.sentTexts.any { it.contains("PROTOCOL_INVALID_PAYLOAD") })
         assertEquals(Triple(null, "PROTOCOL_INVALID_PAYLOAD", "chunk_data frame is missing its binary body"), runtimeUpdates.last())
-        logs.assertLog(Log.ERROR, "relay-command", "image assembly failed for requestId=req_capture_1 frameType=CHUNK_DATA")
+        logs.assertLog(Log.ERROR, "relay-command", "image assembly failed for requestId=req_capture_1 frameType=CHUNK_DATA code=PROTOCOL_INVALID_PAYLOAD")
         logs.assertNoSensitiveData()
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `forward failure logs omit throwable payload details`() = runTest {
+        val webSocket = FakeRelayWebSocket()
+        val client = relayClient(webSocket)
+        val runtimeUpdates = mutableListOf<Triple<String?, String?, String?>>()
+        val bridge = RelayCommandBridge(
+            relayBaseUrl = "https://relay.example.com",
+            deviceId = "phone-device",
+            clock = FakeClock(1_717_172_750L),
+            relaySessionClient = client,
+            activeCommandRegistry = ActiveCommandRegistry(),
+            localCommandForwarder = LocalCommandForwarder(
+                clock = FakeClock(1_717_172_750L),
+                sender = LocalFrameSender { _, _ -> throw IllegalStateException("display text=hello glasses uploadToken=upl_test_1") },
+            ),
+            incomingImageAssembler = IncomingImageAssembler(),
+            relayImageUploader = RelayImageUploader(httpExecutor = RelayHttpExecutor { error("unused") }),
+            runtimeUpdater = { requestId, code, message -> runtimeUpdates += Triple(requestId, code, message) },
+        )
+
+        val logs = captureTimberLogs {
+            bridge.handleRelaySessionEvent(RelaySessionEvent.CommandDispatched(displayDispatch()))
+            runCurrent()
+        }
+
+        assertEquals(Triple(null, "BLUETOOTH_SEND_FAILED", "display text=hello glasses uploadToken=upl_test_1"), runtimeUpdates.last())
+        logs.assertLog(Log.ERROR, "relay-command", "failed to forward relay command requestId=req_display_1 action=DISPLAY_TEXT errorType=IllegalStateException")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { entry ->
+            entry.message.contains("hello glasses") ||
+                entry.message.contains("upl_test_1") ||
+                entry.throwable?.message?.contains("hello glasses") == true ||
+                entry.throwable?.message?.contains("upl_test_1") == true
+        })
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
