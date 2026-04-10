@@ -76,7 +76,9 @@ class AndroidRfcommClientTransport : RfcommClientTransport {
         try {
             closeSocketSilently()
             val createdSocket = withContext(Dispatchers.IO) {
-                adapter.cancelDiscovery()
+                // This client connects to a known bonded device and never starts discovery itself.
+                // Skipping cancelDiscovery avoids Android 12+ treating the call as a scan operation
+                // that would otherwise require BLUETOOTH_SCAN at runtime.
                 remoteDevice.createRfcommSocketToServiceRecord(serviceUuid).also { it.connect() }
             }
             socket = createdSocket

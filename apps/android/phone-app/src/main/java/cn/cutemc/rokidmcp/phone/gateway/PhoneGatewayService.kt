@@ -1,8 +1,12 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.lifecycle.LifecycleService
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import cn.cutemc.rokidmcp.phone.PhoneApp
 import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
@@ -12,6 +16,11 @@ class PhoneGatewayService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> lifecycleScope.launch {
+                if (!hasBluetoothConnectPermission()) {
+                    stopSelf(startId)
+                    return@launch
+                }
+
                 val targetDeviceAddress = requireNotNull(intent.getStringExtra(EXTRA_TARGET_DEVICE_ADDRESS)) {
                     "phone gateway start intent requires targetDeviceAddress"
                 }
@@ -39,7 +48,11 @@ class PhoneGatewayService : LifecycleService() {
             }
         }
 
-        return START_STICKY
+        return if (intent?.action == ACTION_START && !hasBluetoothConnectPermission()) {
+            START_NOT_STICKY
+        } else {
+            START_STICKY
+        }
     }
 
     override fun onDestroy() {
@@ -47,6 +60,11 @@ class PhoneGatewayService : LifecycleService() {
             (application as PhoneApp).appController.stop("service-destroyed")
         }
         super.onDestroy()
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
     }
 
     companion object {
