@@ -78,6 +78,7 @@ class PhoneAppController(
     private val reportMutex = Mutex()
 
     suspend fun start(targetDeviceAddress: String, preloadedConfig: PhoneGatewayConfig? = null) {
+        Timber.tag("controller").i("start requested target=%s", maskBluetoothAddress(targetDeviceAddress))
         if (_runState.value != GatewayRunState.IDLE && localSession != null) {
             stopActiveSession("restarting controller session")
         }
@@ -92,7 +93,7 @@ class PhoneAppController(
         )
 
         if (config.authToken.isNullOrBlank() || config.relayBaseUrl.isNullOrBlank()) {
-            _runState.value = GatewayRunState.ERROR
+            setRunState(GatewayRunState.ERROR)
             Timber.tag("controller").e("missing relay config")
             runtimeStore.replace(
                 runtimeStore.snapshot.value.copy(
@@ -104,8 +105,7 @@ class PhoneAppController(
             return
         }
 
-        _runState.value = GatewayRunState.STARTING
-        Timber.tag("controller").i("start requested for $targetDeviceAddress")
+        setRunState(GatewayRunState.STARTING)
         lastReportedSnapshot = null
         currentTransportState = PhoneTransportState.CONNECTING
         isLocalSessionReady = false
@@ -142,6 +142,8 @@ class PhoneAppController(
             runtimeUpdater = ::applyBridgeCommandState,
         )
 
+        Timber.tag("controller").i("starting relay and local sessions target=%s", maskBluetoothAddress(targetDeviceAddress))
+
         transportEventsJob?.cancel()
         transportEventsJob = controllerScope.launch {
             createdTransport.events.collect { event ->
@@ -149,7 +151,7 @@ class PhoneAppController(
                     is PhoneTransportEvent.StateChanged -> applyTransportState(event.state)
                     is PhoneTransportEvent.Failure -> {
                         Timber.tag("controller").e(event.cause, "phone transport failure")
-                        _runState.value = GatewayRunState.ERROR
+                        setRunState(GatewayRunState.ERROR)
                         relayCommandBridge?.failActiveCommand(
                             code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
                             message = event.cause.message ?: "transport failure",
@@ -164,7 +166,7 @@ class PhoneAppController(
                         )
                     }
                     is PhoneTransportEvent.ConnectionClosed -> {
-                        _runState.value = GatewayRunState.STOPPED
+                        setRunState(GatewayRunState.STOPPED)
                         relayCommandBridge?.failActiveCommand(
                             code = LocalProtocolErrorCodes.BLUETOOTH_DISCONNECTED,
                             message = event.reason ?: "transport disconnected",
@@ -211,10 +213,10 @@ class PhoneAppController(
     }
 
     suspend fun stop(reason: String) {
-        _runState.value = GatewayRunState.STOPPING
-        Timber.tag("controller").i("stop requested: $reason")
+        Timber.tag("controller").i("stop requested reason=%s", reason)
+        setRunState(GatewayRunState.STOPPING)
         stopActiveSession(reason)
-        _runState.value = GatewayRunState.STOPPED
+        setRunState(GatewayRunState.STOPPED)
     }
 
     fun clearLogs() {
@@ -222,6 +224,9 @@ class PhoneAppController(
     }
 
     fun applyTransportState(state: PhoneTransportState) {
+        if (currentTransportState != state) {
+            Timber.tag("controller").d("transport state %s -> %s", currentTransportState.name, state.name)
+        }
         currentTransportState = state
         if (state != PhoneTransportState.CONNECTED) {
             isLocalSessionReady = false
@@ -263,7 +268,8 @@ class PhoneAppController(
     suspend fun handleLocalSessionEvent(event: PhoneLocalSessionEvent) {
         when (event) {
             PhoneLocalSessionEvent.SessionReady -> {
-                _runState.value = GatewayRunState.RUNNING
+                Timber.tag("controller").i("local session ready")
+                setRunState(GatewayRunState.RUNNING)
                 isLocalSessionReady = true
                 val current = runtimeStore.snapshot.value
                 val next = current.copy(
@@ -276,7 +282,8 @@ class PhoneAppController(
             }
 
             is PhoneLocalSessionEvent.HelloRejected -> {
-                _runState.value = GatewayRunState.STOPPED
+                Timber.tag("controller").w("hello rejected code=%s message=%s", event.code, event.message)
+                setRunState(GatewayRunState.STOPPED)
                 isLocalSessionReady = false
                 relayCommandBridge?.failActiveCommand(event.code, event.message)
                 stopActiveSession("session failed")
@@ -298,7 +305,8 @@ class PhoneAppController(
             }
 
             is PhoneLocalSessionEvent.SessionFailed -> {
-                _runState.value = GatewayRunState.STOPPED
+                Timber.tag("controller").w("session failed code=%s message=%s", event.code, event.message)
+                setRunState(GatewayRunState.STOPPED)
                 isLocalSessionReady = false
                 relayCommandBridge?.failActiveCommand(event.code, event.message)
                 stopActiveSession("session failed")
@@ -325,18 +333,22 @@ class PhoneAppController(
             -> relayCommandBridge?.handleRelaySessionEvent(event)
             is RelaySessionEvent.UplinkStateChanged -> {
                 val current = runtimeStore.snapshot.value
+                if (current.uplinkState != event.state) {
+                    Timber.tag("controller").d("uplink state %s -> %s", current.uplinkState.name, event.state.name)
+                }
                 val next = current.copy(
                     uplinkState = event.state,
                     runtimeState = projectRuntimeState(event.state, current.runtimeState),
                 )
                 runtimeStore.replace(next)
-                        reportIfNeeded(next)
-                    }
-                    is RelaySessionEvent.Failed -> {
-                        Timber.tag("controller").e("relay session failed: ${event.message}")
-                        val current = runtimeStore.snapshot.value
-                        val next = current.copy(
-                            uplinkState = PhoneUplinkState.ERROR,
+                reportIfNeeded(next)
+            }
+
+            is RelaySessionEvent.Failed -> {
+                Timber.tag("controller").e("relay session failed: %s", event.message)
+                val current = runtimeStore.snapshot.value
+                val next = current.copy(
+                    uplinkState = PhoneUplinkState.ERROR,
                     runtimeState = projectRuntimeState(PhoneUplinkState.ERROR, current.runtimeState),
                     lastErrorCode = PhoneGatewayErrorCodes.RELAY_SESSION_ERROR,
                     lastErrorMessage = event.message,
@@ -379,7 +391,7 @@ class PhoneAppController(
     }
 
     private fun markStartupFailure(code: String, message: String) {
-        _runState.value = GatewayRunState.ERROR
+        setRunState(GatewayRunState.ERROR)
         runtimeStore.replace(
             runtimeStore.snapshot.value.copy(
                 runtimeState = PhoneRuntimeState.ERROR,
@@ -431,6 +443,13 @@ class PhoneAppController(
                 return
             }
 
+            Timber.tag("controller").d(
+                "reporting snapshot setup=%s runtime=%s uplink=%s command=%s",
+                next.setupState.name,
+                next.runtimeState.name,
+                next.uplinkState.name,
+                next.activeCommandRequestId ?: "<none>",
+            )
             relayClient.sendPhoneStateUpdate(next)
             lastReportedSnapshot = next
         }
@@ -455,5 +474,15 @@ class PhoneAppController(
         )
         runtimeStore.replace(next)
         reportIfNeeded(next)
+    }
+
+    private fun setRunState(next: GatewayRunState) {
+        val current = _runState.value
+        if (current == next) {
+            return
+        }
+
+        Timber.tag("controller").d("run state %s -> %s", current.name, next.name)
+        _runState.value = next
     }
 }

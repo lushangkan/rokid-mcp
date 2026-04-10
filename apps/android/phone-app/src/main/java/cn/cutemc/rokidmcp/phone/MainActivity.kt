@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.cutemc.rokidmcp.phone.ui.settings.PhoneSettingsScreen
 import cn.cutemc.rokidmcp.phone.ui.settings.PhoneSettingsViewModel
 import cn.cutemc.rokidmcp.phone.ui.theme.RokidMCPPhoneTheme
+import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
     private var pendingBluetoothStart: (() -> Unit)? = null
@@ -27,6 +28,11 @@ class MainActivity : ComponentActivity() {
     ) { grantResults ->
         val allGranted = requiredBluetoothPermissions().all { permission ->
             grantResults[permission] == true || hasPermission(permission)
+        }
+        if (allGranted) {
+            Timber.tag("phone-main").i("bluetooth permission result granted")
+        } else {
+            Timber.tag("phone-main").w("bluetooth permission result denied")
         }
         val pendingStart = pendingBluetoothStart
         pendingBluetoothStart = null
@@ -40,6 +46,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Timber.tag("phone-main").i("activity created savedInstanceState=%s", savedInstanceState != null)
         enableEdgeToEdge()
         setContent {
             RokidMCPPhoneTheme {
@@ -82,10 +89,12 @@ class MainActivity : ComponentActivity() {
     private fun ensureBluetoothPermissions(onGranted: () -> Unit) {
         val missingPermissions = requiredBluetoothPermissions().filterNot(::hasPermission)
         if (missingPermissions.isEmpty()) {
+            Timber.tag("phone-main").i("bluetooth permissions already granted")
             onGranted()
             return
         }
 
+        Timber.tag("phone-main").i("requesting bluetooth permissions count=%d", missingPermissions.size)
         pendingBluetoothStart = onGranted
         requestBluetoothPermissions.launch(missingPermissions.toTypedArray())
     }

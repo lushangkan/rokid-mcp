@@ -25,25 +25,36 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.cutemc.rokidmcp.glasses.gateway.GlassesGatewayService
 import cn.cutemc.rokidmcp.glasses.ui.theme.RokidMCPGlassesTheme
+import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
     private val requestBluetoothPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
+            Timber.tag("glasses-main").i("bluetooth permission granted")
             startGatewayService()
+        } else {
+            Timber.tag("glasses-main").w("bluetooth permission denied")
         }
     }
 
     private val requestCameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { }
+    ) { granted ->
+        if (granted) {
+            Timber.tag("glasses-main").i("camera permission granted")
+        } else {
+            Timber.tag("glasses-main").w("camera permission denied")
+        }
+    }
 
     private val glassesApp: GlassesApp
         get() = application as GlassesApp
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Timber.tag("glasses-main").i("activity created")
         enableEdgeToEdge()
         ensureBluetoothPermissionAndStartGateway()
         ensureCameraPermissionRequested()
@@ -74,22 +85,27 @@ class MainActivity : ComponentActivity() {
 
     private fun ensureBluetoothPermissionAndStartGateway() {
         if (BluetoothPermission.hasRequiredPermission(this)) {
+            Timber.tag("glasses-main").i("bluetooth permission already granted")
             startGatewayService()
             return
         }
 
+        Timber.tag("glasses-main").d("requesting bluetooth permission")
         requestBluetoothPermission.launch(BluetoothPermission.requiredPermission)
     }
 
     private fun startGatewayService() {
+        Timber.tag("glasses-main").d("starting gateway service")
         startService(GlassesGatewayService.createStartIntent(this))
     }
 
     private fun ensureCameraPermissionRequested() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            Timber.tag("glasses-main").d("camera permission already granted")
             return
         }
 
+        Timber.tag("glasses-main").d("requesting camera permission")
         requestCameraPermission.launch(Manifest.permission.CAMERA)
     }
 }
