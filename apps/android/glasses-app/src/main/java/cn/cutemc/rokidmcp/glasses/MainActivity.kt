@@ -2,7 +2,6 @@ package cn.cutemc.rokidmcp.glasses
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
@@ -28,14 +27,11 @@ import cn.cutemc.rokidmcp.glasses.gateway.GlassesGatewayService
 import cn.cutemc.rokidmcp.glasses.ui.theme.RokidMCPGlassesTheme
 
 class MainActivity : ComponentActivity() {
-    private val requestBluetoothPermissions = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grantResults ->
-        val allGranted = requiredBluetoothPermissions().all { permission ->
-            grantResults[permission] == true || hasPermission(permission)
-        }
-        if (allGranted) {
-            startService(GlassesGatewayService.createStartIntent(this))
+    private val requestBluetoothPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            startGatewayService()
         }
     }
 
@@ -49,7 +45,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        ensureBluetoothPermissionRequested()
+        ensureBluetoothPermissionAndStartGateway()
         ensureCameraPermissionRequested()
         setContent {
             RokidMCPGlassesTheme {
@@ -76,33 +72,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun ensureBluetoothPermissionRequested() {
-        val missingPermissions = requiredBluetoothPermissions().filterNot(::hasPermission)
-        if (missingPermissions.isEmpty()) {
-            startService(GlassesGatewayService.createStartIntent(this))
+    private fun ensureBluetoothPermissionAndStartGateway() {
+        if (BluetoothPermission.hasRequiredPermission(this)) {
+            startGatewayService()
             return
         }
 
-        requestBluetoothPermissions.launch(missingPermissions.toTypedArray())
+        requestBluetoothPermission.launch(BluetoothPermission.requiredPermission)
+    }
+
+    private fun startGatewayService() {
+        startService(GlassesGatewayService.createStartIntent(this))
     }
 
     private fun ensureCameraPermissionRequested() {
-        if (hasPermission(Manifest.permission.CAMERA)) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             return
         }
 
         requestCameraPermission.launch(Manifest.permission.CAMERA)
-    }
-
-    private fun requiredBluetoothPermissions(): Array<String> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            emptyArray()
-        }
-    }
-
-    private fun hasPermission(permission: String): Boolean {
-        return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
     }
 }
