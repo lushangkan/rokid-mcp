@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 enum class GlassesTransportState {
     IDLE,
@@ -90,7 +91,7 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
                 try {
                     val acceptedSocket = listeningSocket.accept()
                     if (acceptedSocket.remoteDevice?.bondState != android.bluetooth.BluetoothDevice.BOND_BONDED) {
-                        runCatching { acceptedSocket.close() }
+                        closeResourceSilently("unbonded RFCOMM client socket") { acceptedSocket.close() }
                         continue
                     }
 
@@ -100,6 +101,7 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
                         return@launch
                     }
 
+                    Timber.tag("rfcomm-server").e(error, "RFCOMM server accept loop failed")
                     internalState.value = GlassesTransportState.ERROR
                     internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.ERROR))
                     internalEvents.emit(GlassesTransportEvent.Failure(IOException("rfcomm server accept failed", error)))
@@ -119,6 +121,7 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
                     currentClient.outputStream.flush()
                 }
             } catch (error: Throwable) {
+                Timber.tag("rfcomm-server").e(error, "failed to write RFCOMM frame to connected client")
                 internalState.value = GlassesTransportState.ERROR
                 internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.ERROR))
                 internalEvents.emit(GlassesTransportEvent.Failure(IOException("failed to write RFCOMM frame", error)))
@@ -139,7 +142,7 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
     }
 
     private suspend fun attachClient(socket: BluetoothSocket) {
-        runCatching { clientSocket?.close() }
+        closeResourceSilently("previous RFCOMM client socket") { clientSocket?.close() }
         clientSocket = socket
         internalState.value = GlassesTransportState.CONNECTED
         internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.CONNECTED))
@@ -167,7 +170,7 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
     }
 
     private suspend fun handleClientDisconnected(reason: String) {
-        runCatching { clientSocket?.close() }
+        closeResourceSilently("RFCOMM client socket after disconnect") { clientSocket?.close() }
         clientSocket = null
         internalState.value = GlassesTransportState.LISTENING
         internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.LISTENING))
@@ -175,7 +178,8 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
     }
 
     private suspend fun handleClientFailure(error: IOException) {
-        runCatching { clientSocket?.close() }
+        Timber.tag("rfcomm-server").e(error, "RFCOMM server client connection failed")
+        closeResourceSilently("RFCOMM client socket after failure") { clientSocket?.close() }
         clientSocket = null
         internalState.value = GlassesTransportState.ERROR
         internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.ERROR))
@@ -183,9 +187,15 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
     }
 
     private fun closeSocketsSilently() {
-        runCatching { clientSocket?.close() }
-        runCatching { serverSocket?.close() }
+        closeResourceSilently("RFCOMM client socket") { clientSocket?.close() }
+        closeResourceSilently("RFCOMM server socket") { serverSocket?.close() }
         clientSocket = null
         serverSocket = null
+    }
+
+    private inline fun closeResourceSilently(resourceName: String, closeAction: () -> Unit) {
+        runCatching(closeAction).onFailure { error ->
+            Timber.tag("rfcomm-server").w(error, "failed to close $resourceName")
+        }
     }
 }

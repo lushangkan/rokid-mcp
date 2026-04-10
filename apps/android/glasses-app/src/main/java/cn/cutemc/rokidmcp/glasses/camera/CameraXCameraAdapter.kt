@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 class CameraXCameraAdapter(
     private val context: Context,
@@ -78,11 +79,15 @@ class CameraXCameraAdapter(
                         withContext(Dispatchers.Main.immediate) {
                             provider.unbindAll()
                         }
+                    }.onFailure { error ->
+                        Timber.tag("camera").w(error, "failed to unbind CameraX provider after capture")
                     }
                 }
                 outputFile?.let { file ->
                     runCatching {
                         tempFileDeleter(file)
+                    }.onFailure { error ->
+                        Timber.tag("camera").w(error, "failed to delete temporary capture file")
                     }
                 }
             }
@@ -101,18 +106,21 @@ class CameraXCameraAdapter(
     private suspend fun loadCameraProvider(): ProcessCameraProvider = try {
         cameraProviderLoader(context)
     } catch (error: Throwable) {
+        Timber.tag("camera").e(error, "failed to load camera provider")
         throw mapUnavailable(error, "camera is unavailable")
     }
 
     private suspend fun createTempFile(): File = try {
         tempFileFactory(context)
     } catch (error: Throwable) {
+        Timber.tag("camera").e(error, "failed to create temporary capture file")
         throw mapCaptureFailure(error, "camera capture could not allocate temporary storage")
     }
 
     private suspend fun readCaptureBytes(file: File): ByteArray = try {
         captureBytesReader(file)
     } catch (error: Throwable) {
+        Timber.tag("camera").e(error, "failed to read captured image bytes")
         throw mapCaptureFailure(error, "camera capture could not be read")
     }
 
@@ -133,6 +141,7 @@ class CameraXCameraAdapter(
             )
         }
     } catch (error: Throwable) {
+        Timber.tag("camera").e(error, "failed to bind CameraX image capture use case")
         throw mapUnavailable(error, "camera is unavailable")
     }
 
@@ -145,7 +154,8 @@ class CameraXCameraAdapter(
         return preferredSelectors.firstOrNull { selector ->
             try {
                 cameraProvider.hasCamera(selector)
-            } catch (_: CameraInfoUnavailableException) {
+            } catch (error: CameraInfoUnavailableException) {
+                Timber.tag("camera").w(error, "failed to inspect camera availability")
                 false
             }
         } ?: throw CameraCaptureException(
@@ -171,6 +181,7 @@ class CameraXCameraAdapter(
                     if (!continuation.isActive) {
                         return
                     }
+                    Timber.tag("camera").e(exception, "CameraX image capture callback failed")
                     continuation.resumeWithException(exception)
                 }
             },
@@ -254,6 +265,7 @@ private suspend fun awaitCameraProvider(context: Context): ProcessCameraProvider
                 if (!continuation.isActive) {
                     return@addListener
                 }
+                Timber.tag("camera").e(error, "failed to resolve ProcessCameraProvider future")
                 continuation.resumeWithException(error)
             }
         },

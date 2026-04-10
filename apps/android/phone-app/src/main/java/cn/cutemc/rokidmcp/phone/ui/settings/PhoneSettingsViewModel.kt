@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 data class PhoneSettingsUiState(
     val deviceId: String = "",
@@ -126,6 +127,9 @@ class PhoneSettingsViewModel(
                 withContext(ioDispatcher) {
                     persistCurrentConfig(state)
                 }
+            }
+            saveResult.exceptionOrNull()?.let { error ->
+                Timber.tag("settings").e(error, "failed to save phone settings")
             }
             _uiState.value = if (saveResult.isSuccess) {
                 _uiState.value.copy(saveMessage = "Saved")

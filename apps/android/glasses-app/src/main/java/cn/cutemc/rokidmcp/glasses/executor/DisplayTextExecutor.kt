@@ -6,6 +6,7 @@ import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextOutcome
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextResult
+import kotlinx.coroutines.CancellationException
 
 class DisplayTextExecutor(
     private val textRenderer: TextRenderer,
@@ -15,9 +16,13 @@ class DisplayTextExecutor(
         try {
             textRenderer.render(command.params.text, command.params.durationMs)
         } catch (error: Exception) {
+            if (error is CancellationException) {
+                throw error
+            }
             throw DisplayTextExecutionException(
                 code = LocalProtocolErrorCodes.DISPLAY_FAILED,
                 message = error.message ?: "failed to render display_text command",
+                cause = error,
             )
         }
 
@@ -34,4 +39,5 @@ class DisplayTextExecutor(
 class DisplayTextExecutionException(
     val code: String,
     override val message: String,
-) : IllegalStateException(message)
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)

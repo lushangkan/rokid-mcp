@@ -44,6 +44,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import timber.log.Timber
 
 sealed interface RelaySessionEvent {
     data object Connected : RelaySessionEvent
@@ -205,7 +206,8 @@ class RelaySessionClient(
     suspend fun onTextMessage(text: String) {
         val messageType = try {
             text.toRelayMessageType(json)
-        } catch (_: SerializationException) {
+        } catch (error: SerializationException) {
+            Timber.tag("relay-session").w(error, "failed to detect relay message type")
             null
         }
 
@@ -218,7 +220,8 @@ class RelaySessionClient(
                         ?.get("sessionId")
                         ?.jsonPrimitive
                         ?.contentOrNull
-                } catch (_: Exception) {
+                } catch (error: Exception) {
+                    Timber.tag("relay-session").w(error, "failed to extract relay sessionId from hello_ack")
                     null
                 }
                 if (ackSessionId.isNullOrBlank()) {
@@ -233,6 +236,7 @@ class RelaySessionClient(
                 val ack = try {
                     json.decodeFromString(RelayHelloAckMessage.serializer(), text)
                 } catch (error: SerializationException) {
+                    Timber.tag("relay-session").e(error, "failed to decode relay hello_ack payload")
                     heartbeatJob?.cancel()
                     heartbeatJob = null
                     sessionId = null
@@ -275,6 +279,7 @@ class RelaySessionClient(
     }
 
     suspend fun onFailure(error: Throwable) {
+        Timber.tag("relay-session").e(error, "relay websocket failure")
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null

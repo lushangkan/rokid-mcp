@@ -20,6 +20,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class CommandDispatcher(
     private val clock: Clock,
@@ -75,6 +76,7 @@ class CommandDispatcher(
                 val result = displayTextExecutor.execute(command)
                 sendDisplayTextResult(requestId, result)
             } catch (error: DisplayTextExecutionException) {
+                Timber.tag("command-dispatch").e(error, "display_text command failed for requestId=$requestId")
                 sendCommandError(
                     requestId = requestId,
                     action = command.action,

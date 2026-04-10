@@ -23,6 +23,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
 import kotlinx.coroutines.CancellationException
+import timber.log.Timber
 
 class CapturePhotoExecutor(
     private val cameraAdapter: CameraAdapter,
@@ -39,9 +40,11 @@ class CapturePhotoExecutor(
         val capture = try {
             cameraAdapter.capture(command.params.quality)
         } catch (error: CameraCaptureException) {
+            Timber.tag("capture-photo").e(error, "camera capture failed for requestId=$requestId")
             sendFailure(requestId, error.code, error.message, retryable = error.code == LocalProtocolErrorCodes.CAMERA_UNAVAILABLE)
             return
         } catch (error: IllegalArgumentException) {
+            Timber.tag("capture-photo").e(error, "camera returned invalid jpeg metadata for requestId=$requestId")
             sendFailure(
                 requestId = requestId,
                 code = LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED,
@@ -53,6 +56,7 @@ class CapturePhotoExecutor(
             if (error is CancellationException) {
                 throw error
             }
+            Timber.tag("capture-photo").e(error, "unexpected camera capture failure for requestId=$requestId")
             sendFailure(
                 requestId = requestId,
                 code = LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED,
@@ -75,9 +79,17 @@ class CapturePhotoExecutor(
                 sha256 = sha256,
             )
         } catch (error: CapturePhotoExecutionException) {
+            Timber.tag("capture-photo").e(
+                error,
+                "capture_photo validation failed for requestId=$requestId transferId=${command.transfer.transferId}",
+            )
             sendFailure(requestId, error.code, error.message, retryable = error.retryable)
             return
         } catch (error: ImageChunkSenderException) {
+            Timber.tag("capture-photo").e(
+                error,
+                "capture_photo image transfer failed for requestId=$requestId transferId=${command.transfer.transferId}",
+            )
             sendFailure(requestId, error.code, error.message, retryable = error.code == LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED)
             return
         }

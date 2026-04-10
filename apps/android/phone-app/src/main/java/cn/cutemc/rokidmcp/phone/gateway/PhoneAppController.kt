@@ -113,6 +113,7 @@ class PhoneAppController(
         val createdTransport = try {
             createTransport()
         } catch (error: Throwable) {
+            Timber.tag("controller").e(error, "failed to create bluetooth transport")
             markStartupFailure(
                 code = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_UNAVAILABLE,
                 message = error.message ?: "bluetooth transport unavailable",
@@ -147,6 +148,7 @@ class PhoneAppController(
                 when (event) {
                     is PhoneTransportEvent.StateChanged -> applyTransportState(event.state)
                     is PhoneTransportEvent.Failure -> {
+                        Timber.tag("controller").e(event.cause, "phone transport failure")
                         _runState.value = GatewayRunState.ERROR
                         relayCommandBridge?.failActiveCommand(
                             code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
@@ -199,6 +201,7 @@ class PhoneAppController(
             createdRelaySessionClient.connect()
             createdSession.start(targetDeviceAddress)
         } catch (error: Throwable) {
+            Timber.tag("controller").e(error, "gateway startup failed for $targetDeviceAddress")
             markStartupFailure(
                 code = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_UNAVAILABLE,
                 message = error.message ?: "bluetooth transport unavailable",
@@ -327,12 +330,13 @@ class PhoneAppController(
                     runtimeState = projectRuntimeState(event.state, current.runtimeState),
                 )
                 runtimeStore.replace(next)
-                reportIfNeeded(next)
-            }
-            is RelaySessionEvent.Failed -> {
-                val current = runtimeStore.snapshot.value
-                val next = current.copy(
-                    uplinkState = PhoneUplinkState.ERROR,
+                        reportIfNeeded(next)
+                    }
+                    is RelaySessionEvent.Failed -> {
+                        Timber.tag("controller").e("relay session failed: ${event.message}")
+                        val current = runtimeStore.snapshot.value
+                        val next = current.copy(
+                            uplinkState = PhoneUplinkState.ERROR,
                     runtimeState = projectRuntimeState(PhoneUplinkState.ERROR, current.runtimeState),
                     lastErrorCode = PhoneGatewayErrorCodes.RELAY_SESSION_ERROR,
                     lastErrorMessage = event.message,

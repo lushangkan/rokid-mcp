@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 data class PhoneHelloConfig(
     val deviceId: String,
@@ -132,6 +133,7 @@ open class PhoneLocalLinkSession(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            Timber.tag("local-session").e(error, "failed to decode local frame from glasses")
             emitFailure(
                 code = LocalProtocolErrorCodes.BLUETOOTH_PROTOCOL_ERROR,
                 message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
