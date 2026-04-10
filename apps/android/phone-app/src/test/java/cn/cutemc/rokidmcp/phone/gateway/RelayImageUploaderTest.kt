@@ -1,8 +1,13 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import android.util.Log
+import cn.cutemc.rokidmcp.phone.logging.assertLog
+import cn.cutemc.rokidmcp.phone.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.phone.logging.captureTimberLogs
 import kotlinx.coroutines.test.runTest
 import okio.Buffer
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
@@ -37,19 +42,24 @@ class RelayImageUploaderTest {
             },
         )
 
-        val response = uploader.upload(
-            RelayImageUploadInput(
-                relayBaseUrl = "https://relay.example.com/base",
-                deviceId = "phone-device",
-                requestId = "req_capture_1",
-                imageId = "img_test_1",
-                transferId = "trf_test_1",
-                uploadToken = "upl_test_1",
-                contentType = "image/jpeg",
-                bytes = imageBytes,
-                sha256 = "abcd",
-            ),
-        )
+        lateinit var response: cn.cutemc.rokidmcp.share.protocol.relay.ImageUploadResponse
+        val logs = captureTimberLogs {
+            kotlinx.coroutines.runBlocking {
+                response = uploader.upload(
+                    RelayImageUploadInput(
+                        relayBaseUrl = "https://relay-user:relay-pass@relay.example.com/base",
+                        deviceId = "phone-device",
+                        requestId = "req_capture_1",
+                        imageId = "img_test_1",
+                        transferId = "trf_test_1",
+                        uploadToken = "upl_test_1",
+                        contentType = "image/jpeg",
+                        bytes = imageBytes,
+                        sha256 = "abcd",
+                    ),
+                )
+            }
+        }
 
         val request = requireNotNull(capturedRequest)
         val bodyBuffer = Buffer()
@@ -60,10 +70,14 @@ class RelayImageUploaderTest {
         assertEquals("req_capture_1", request.header("X-Request-Id"))
         assertEquals("abcd", request.header("X-Upload-Checksum-Sha256"))
         assertEquals(
-            "https://relay.example.com/base/api/v1/images/img_test_1?uploadToken=upl_test_1",
+            "https://relay-user:relay-pass@relay.example.com/base/api/v1/images/img_test_1?uploadToken=upl_test_1",
             request.url.toString(),
         )
         assertArrayEquals(imageBytes, bodyBuffer.readByteArray())
+        logs.assertLog(Log.INFO, "relay-upload", "starting relay image upload requestId=req_capture_1 transferId=trf_test_1 imageId=img_test_1 url=https://relay.example.com/base/api/v1/images/img_test_1")
+        logs.assertLog(Log.INFO, "relay-upload", "relay image upload succeeded requestId=req_capture_1 transferId=trf_test_1 imageId=img_test_1 status=UPLOADED url=https://relay.example.com/base/api/v1/images/img_test_1")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { it.message.contains("relay-user") || it.message.contains("upl_test_1") })
     }
 
     @Test
@@ -88,25 +102,34 @@ class RelayImageUploaderTest {
             },
         )
 
+        lateinit var logs: List<cn.cutemc.rokidmcp.phone.logging.CapturingTimberTree.LogEntry>
         val error = assertThrows(RelayImageUploadException::class.java) {
             kotlinx.coroutines.runBlocking {
-                uploader.upload(
-                    RelayImageUploadInput(
-                        relayBaseUrl = "https://relay.example.com",
-                        deviceId = "phone-device",
-                        requestId = "req_capture_1",
-                        imageId = "img_test_1",
-                        transferId = "trf_test_1",
-                        uploadToken = "upl_test_1",
-                        contentType = "image/jpeg",
-                        bytes = byteArrayOf(1, 2, 3),
-                    ),
-                )
+                logs = captureTimberLogs {
+                    kotlinx.coroutines.runBlocking {
+                        uploader.upload(
+                            RelayImageUploadInput(
+                                relayBaseUrl = "https://relay-user:relay-pass@relay.example.com/base",
+                                deviceId = "phone-device",
+                                requestId = "req_capture_1",
+                                imageId = "img_test_1",
+                                transferId = "trf_test_1",
+                                uploadToken = "upl_test_1",
+                                contentType = "image/jpeg",
+                                bytes = byteArrayOf(1, 2, 3),
+                            ),
+                        )
+                    }
+                }
             }
         }
 
         assertEquals("IMAGE_TOO_LARGE", error.code)
         assertEquals("too large", error.message)
         assertNotNull(error)
+        logs.assertLog(Log.INFO, "relay-upload", "starting relay image upload requestId=req_capture_1 transferId=trf_test_1 imageId=img_test_1 url=https://relay.example.com/base/api/v1/images/img_test_1")
+        logs.assertLog(Log.ERROR, "relay-upload", "relay image upload failed requestId=req_capture_1 transferId=trf_test_1 imageId=img_test_1 httpCode=413 code=IMAGE_TOO_LARGE retryable=false url=https://relay.example.com/base/api/v1/images/img_test_1")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { it.message.contains("relay-user") || it.message.contains("upl_test_1") })
     }
 }
