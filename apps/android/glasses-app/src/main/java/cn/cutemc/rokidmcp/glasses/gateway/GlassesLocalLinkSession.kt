@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class GlassesLocalLinkSession(
     private val transport: RfcommServerTransport,
@@ -37,7 +38,10 @@ class GlassesLocalLinkSession(
                 when (event) {
                     is GlassesTransportEvent.StateChanged -> controller.applyTransportState(event.state)
                     is GlassesTransportEvent.FrameReceived -> handleFrame(event)
-                    is GlassesTransportEvent.Failure -> controller.markFailure(event.cause.message ?: "transport failure")
+                    is GlassesTransportEvent.Failure -> {
+                        Timber.tag("glasses-session").e(event.cause, "glasses transport failure")
+                        controller.markFailure(event.cause.message ?: "transport failure")
+                    }
                     is GlassesTransportEvent.ConnectionClosed -> controller.markDisconnected()
                 }
             }

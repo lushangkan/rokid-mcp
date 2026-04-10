@@ -16,6 +16,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import timber.log.Timber
 
 data class RelayImageUploadInput(
     val relayBaseUrl: String,
@@ -74,10 +75,12 @@ class RelayImageUploader(
         return try {
             json.decodeFromString(ImageUploadResponse.serializer(), response.body)
         } catch (error: SerializationException) {
+            Timber.tag("relay-upload").e(error, "relay returned an invalid image upload response body")
             throw RelayImageUploadException(
                 code = LocalProtocolErrorCodes.UPLOAD_FAILED,
                 message = error.message ?: "relay returned an invalid image upload response",
                 retryable = true,
+                cause = error,
             )
         }
     }
@@ -85,7 +88,8 @@ class RelayImageUploader(
     private fun parseFailure(response: RelayHttpResponse): RelayImageUploadException {
         val relayError = try {
             json.decodeFromString(ErrorResponse.serializer(), response.body)
-        } catch (_: SerializationException) {
+        } catch (error: SerializationException) {
+            Timber.tag("relay-upload").w(error, "failed to decode relay error response body with HTTP ${response.code}")
             null
         }
 
@@ -121,4 +125,5 @@ class RelayImageUploadException(
     val code: String,
     override val message: String,
     val retryable: Boolean,
-) : IllegalStateException(message)
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)

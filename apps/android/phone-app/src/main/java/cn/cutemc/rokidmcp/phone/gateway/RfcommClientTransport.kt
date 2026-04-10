@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 enum class PhoneTransportState {
     IDLE,
@@ -85,6 +86,7 @@ class AndroidRfcommClientTransport : RfcommClientTransport {
             internalEvents.emit(PhoneTransportEvent.StateChanged(PhoneTransportState.CONNECTED))
             startReadLoop(createdSocket)
         } catch (error: Throwable) {
+            Timber.tag("rfcomm-client").e(error, "failed to connect RFCOMM client to $targetDeviceAddress")
             closeSocketSilently()
             internalState.value = PhoneTransportState.ERROR
             internalEvents.emit(PhoneTransportEvent.StateChanged(PhoneTransportState.ERROR))
@@ -102,6 +104,7 @@ class AndroidRfcommClientTransport : RfcommClientTransport {
                     currentOutput.flush()
                 }
             } catch (error: Throwable) {
+                Timber.tag("rfcomm-client").e(error, "failed to write RFCOMM bytes to glasses")
                 internalState.value = PhoneTransportState.ERROR
                 internalEvents.emit(PhoneTransportEvent.StateChanged(PhoneTransportState.ERROR))
                 internalEvents.emit(PhoneTransportEvent.Failure(IOException("failed to write RFCOMM bytes", error)))
@@ -141,6 +144,7 @@ class AndroidRfcommClientTransport : RfcommClientTransport {
     }
 
     private suspend fun handleReadFailure(error: IOException) {
+        Timber.tag("rfcomm-client").e(error, "RFCOMM client read loop failed")
         closeSocket(error.message ?: "rfcomm client read failure", emitClosedEvent = false)
         internalState.value = PhoneTransportState.ERROR
         internalEvents.emit(PhoneTransportEvent.StateChanged(PhoneTransportState.ERROR))
@@ -159,11 +163,17 @@ class AndroidRfcommClientTransport : RfcommClientTransport {
     }
 
     private fun closeSocketSilently() {
-        runCatching { inputStream?.close() }
-        runCatching { outputStream?.close() }
-        runCatching { socket?.close() }
+        closeResourceSilently("RFCOMM input stream") { inputStream?.close() }
+        closeResourceSilently("RFCOMM output stream") { outputStream?.close() }
+        closeResourceSilently("RFCOMM socket") { socket?.close() }
         inputStream = null
         outputStream = null
         socket = null
+    }
+
+    private inline fun closeResourceSilently(resourceName: String, closeAction: () -> Unit) {
+        runCatching(closeAction).onFailure { error ->
+            Timber.tag("rfcomm-client").w(error, "failed to close $resourceName")
+        }
     }
 }

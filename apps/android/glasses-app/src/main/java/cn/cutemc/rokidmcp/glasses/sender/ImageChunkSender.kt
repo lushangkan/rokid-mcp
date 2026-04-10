@@ -13,6 +13,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
 import cn.cutemc.rokidmcp.share.protocol.local.ProtocolCodecException
 import kotlinx.coroutines.CancellationException
 import kotlin.math.min
+import timber.log.Timber
 
 fun interface GlassesFrameSender {
     suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?)
@@ -146,12 +147,20 @@ class ImageChunkSender(
         } catch (error: ImageChunkSenderException) {
             throw error
         } catch (error: ProtocolCodecException) {
+            Timber.tag("image-chunk").e(
+                error,
+                "failed to encode image transfer frame type=${header.type} requestId=${header.requestId} transferId=${header.transferId}",
+            )
             throw ImageChunkSenderException(
                 code = LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD,
                 message = error.message ?: "failed to encode image transfer frame",
                 cause = error,
             )
         } catch (error: Exception) {
+            Timber.tag("image-chunk").e(
+                error,
+                "failed to send image transfer frame type=${header.type} requestId=${header.requestId} transferId=${header.transferId}",
+            )
             throw ImageChunkSenderException(
                 code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
                 message = error.message ?: "failed to send image transfer frame",
