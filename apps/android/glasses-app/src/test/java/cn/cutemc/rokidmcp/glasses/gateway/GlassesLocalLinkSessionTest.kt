@@ -1,12 +1,17 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
 import android.os.Build
+import android.util.Log
 import cn.cutemc.rokidmcp.glasses.BuildConfig
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
+import cn.cutemc.rokidmcp.glasses.logging.CapturingTimberTree
+import cn.cutemc.rokidmcp.glasses.logging.assertLog
+import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
@@ -15,7 +20,8 @@ import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoResult
 import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
-import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
+import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
 import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
@@ -34,6 +40,10 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class GlassesLocalLinkSessionTest {
+    private companion object {
+        const val LOG_TAG = "glasses-session"
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `hello frame event sends accepted hello ack and marks runtime ready`() = runTest {
@@ -86,6 +96,51 @@ class GlassesLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `hello handshake logs session milestones`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_171_850L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_171_850L)),
+        )
+
+        val logs = captureLogs {
+            session.start()
+            runCurrent()
+            transport.emit(
+                GlassesTransportEvent.FrameReceived(
+                    LocalFrameHeader(
+                        type = LocalMessageType.HELLO,
+                        timestamp = 1_717_171_851L,
+                        payload = HelloPayload(
+                            role = LinkRole.PHONE,
+                            deviceId = "phone-device",
+                            appVersion = "1.0.0",
+                            supportedActions = listOf(CommandAction.DISPLAY_TEXT),
+                        ),
+                    ),
+                ),
+            )
+            runCurrent()
+            session.stop("test complete")
+            runCurrent()
+        }
+
+        logs.assertLog(Log.INFO, LOG_TAG, "starting glasses local link session")
+        logs.assertLog(Log.INFO, LOG_TAG, "observed transport state=LISTENING")
+        logs.assertLog(Log.INFO, LOG_TAG, "received HELLO role=PHONE deviceId=phone-device appVersion=1.0.0 actions=1")
+        logs.assertLog(Log.INFO, LOG_TAG, "sent HELLO_ACK accepted=true role=GLASSES capabilities=2 runtimeState=READY")
+        logs.assertLog(Log.INFO, LOG_TAG, "stopping glasses local link session reason=test complete")
+        logs.assertLog(Log.INFO, LOG_TAG, "glasses transport disconnected reason=test complete")
+        logs.assertNoSensitiveData()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `ping frame event sends pong`() = runTest {
         val runtimeStore = GlassesRuntimeStore()
         val controller = GlassesAppController(runtimeStore = runtimeStore)
@@ -122,6 +177,40 @@ class GlassesLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `ping frame logs ping and pong traces`() = runTest {
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_171_950L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_171_950L)),
+        )
+
+        val logs = captureLogs {
+            session.start()
+            runCurrent()
+            transport.emit(
+                GlassesTransportEvent.FrameReceived(
+                    LocalFrameHeader(
+                        type = LocalMessageType.PING,
+                        timestamp = 1_717_171_951L,
+                        payload = PingPayload(seq = 11, nonce = "nonce-11"),
+                    ),
+                ),
+            )
+            runCurrent()
+            session.stop("test complete")
+            runCurrent()
+        }
+
+        logs.assertLog(Log.VERBOSE, LOG_TAG, "received PING seq=11 nonce=nonce-11")
+        logs.assertLog(Log.VERBOSE, LOG_TAG, "sent PONG seq=11 nonce=nonce-11")
+        logs.assertNoSensitiveData()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `transport failure event moves runtime state to error`() = runTest {
         val runtimeStore = GlassesRuntimeStore()
         val controller = GlassesAppController(runtimeStore = runtimeStore)
@@ -142,6 +231,31 @@ class GlassesLocalLinkSessionTest {
         assertEquals(GlassesRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
 
         session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `transport failure event logs error outcome`() = runTest {
+        val transport = FakeRfcommServerTransport()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_172_050L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_050L)),
+        )
+
+        val logs = captureLogs {
+            session.start()
+            runCurrent()
+            transport.emit(GlassesTransportEvent.Failure(IllegalStateException("rfcomm broken")))
+            runCurrent()
+            session.stop("test complete")
+            runCurrent()
+        }
+
+        logs.assertLog(Log.ERROR, LOG_TAG, "glasses transport failure")
+        logs.assertNoSensitiveData()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -297,6 +411,46 @@ class GlassesLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `hello ack send failure logs warning`() = runTest {
+        val transport = FakeRfcommServerTransport().apply {
+            sendFailure = IllegalStateException("ack send failed")
+        }
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_172_340L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_340L)),
+        )
+
+        val logs = captureLogs {
+            session.start()
+            runCurrent()
+            transport.emit(
+                GlassesTransportEvent.FrameReceived(
+                    LocalFrameHeader(
+                        type = LocalMessageType.HELLO,
+                        timestamp = 1_717_172_341L,
+                        payload = HelloPayload(
+                            role = LinkRole.PHONE,
+                            deviceId = "phone-device",
+                            appVersion = "1.0.0",
+                            supportedActions = listOf(CommandAction.DISPLAY_TEXT),
+                        ),
+                    ),
+                ),
+            )
+            runCurrent()
+            session.stop("test complete")
+            runCurrent()
+        }
+
+        logs.assertLog(Log.WARN, LOG_TAG, "failed to send hello_ack frame")
+        logs.assertNoSensitiveData()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `start failure cleans up collection job and allows retry`() = runTest {
         val runtimeStore = GlassesRuntimeStore()
         val controller = GlassesAppController(runtimeStore = runtimeStore)
@@ -404,6 +558,47 @@ class GlassesLocalLinkSessionTest {
         assertEquals(null, runtimeStore.snapshot.value.lastErrorMessage)
 
         session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `command frame logs handoff before dispatch`() = runTest {
+        val transport = FakeRfcommServerTransport()
+        val clock = FakeClock(1_717_172_460L)
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = clock,
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, clock),
+        )
+
+        val logs = captureLogs {
+            session.start()
+            runCurrent()
+            transport.emit(
+                GlassesTransportEvent.FrameReceived(
+                    LocalFrameHeader(
+                        type = LocalMessageType.COMMAND,
+                        requestId = "req_display_1",
+                        timestamp = 1_717_172_461L,
+                        payload = DisplayTextCommand(
+                            timeoutMs = 5_000L,
+                            params = DisplayTextCommandParams(
+                                text = "hello glasses",
+                                durationMs = 1_000L,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            runCurrent()
+            session.stop("test complete")
+            runCurrent()
+        }
+
+        logs.assertLog(Log.INFO, LOG_TAG, "handing off COMMAND frame requestId=req_display_1 payload=DisplayTextCommand")
+        logs.assertNoSensitiveData()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -521,4 +716,11 @@ class GlassesLocalLinkSessionTest {
         clock = clock,
         frameSender = GlassesFrameSender(transport::send),
     )
+
+    private fun captureLogs(block: suspend () -> Unit): List<CapturingTimberTree.LogEntry> =
+        captureTimberLogs {
+            kotlinx.coroutines.runBlocking {
+                block()
+            }
+        }
 }
