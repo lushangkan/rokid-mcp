@@ -22,6 +22,7 @@ class FakeRfcommServerTransport : RfcommServerTransport {
     val stopReasons: MutableList<String> = mutableListOf()
     var startCount: Int = 0
     var startFailure: Throwable? = null
+    var sendFailure: Throwable? = null
 
     override suspend fun start() {
         startCount += 1
@@ -31,6 +32,7 @@ class FakeRfcommServerTransport : RfcommServerTransport {
     }
 
     override suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?) {
+        sendFailure?.let { throw it }
         sentFrames += SentFrame(header = header, body = body)
     }
 

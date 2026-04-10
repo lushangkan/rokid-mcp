@@ -17,6 +17,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.DisplayingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.ExecutingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
@@ -127,6 +128,94 @@ class CommandDispatcherTest {
         runCurrent()
 
         assertEquals(LocalMessageType.COMMAND_RESULT, frames.last().type)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `dispatcher falls back to command error when display response send fails`() = runTest {
+        val frames = mutableListOf<LocalFrameHeader<*>>()
+        var failFirstSend = true
+        val dispatcher = CommandDispatcher(
+            clock = FakeClock(1_717_191_400L),
+            scope = backgroundScope,
+            frameSender = GlassesFrameSender { header, _ ->
+                if (failFirstSend) {
+                    failFirstSend = false
+                    throw IllegalStateException("ack send failed")
+                }
+                frames += header
+            },
+            exclusiveGuard = ExclusiveExecutionGuard(),
+            displayTextExecutor = DisplayTextExecutor(
+                textRenderer = TextRenderer { _, _ -> Unit },
+                clock = FakeClock(1_717_191_400L),
+            ),
+            capturePhotoExecutor = testCapturePhotoExecutor(),
+        )
+
+        dispatcher.handleCommand(displayCommand("req_display_4"))
+        runCurrent()
+
+        assertEquals(1, frames.size)
+        assertEquals(LocalMessageType.COMMAND_ERROR, frames.single().type)
+        val error = frames.single().payload as CommandError
+        assertEquals(LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED, error.error.code)
+        assertEquals("ack send failed", error.error.message)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `dispatcher falls back to command error when capture executor send fails`() = runTest {
+        val frames = mutableListOf<LocalFrameHeader<*>>()
+        val dispatcher = CommandDispatcher(
+            clock = FakeClock(1_717_191_500L),
+            scope = backgroundScope,
+            frameSender = GlassesFrameSender { header, _ -> frames += header },
+            exclusiveGuard = ExclusiveExecutionGuard(),
+            displayTextExecutor = DisplayTextExecutor(
+                textRenderer = TextRenderer { _, _ -> Unit },
+                clock = FakeClock(1_717_191_500L),
+            ),
+            capturePhotoExecutor = CapturePhotoExecutor(
+                cameraAdapter = object : CameraAdapter {
+                    override suspend fun capture(quality: cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality?) = CameraCapture(
+                        bytes = "jpeg-test".encodeToByteArray(),
+                        width = 640,
+                        height = 480,
+                    )
+                },
+                checksumCalculator = ChecksumCalculator(),
+                imageChunkSender = ImageChunkSender(
+                    clock = FakeClock(1_717_191_500L),
+                    frameSender = GlassesFrameSender { _, _ -> },
+                ),
+                clock = FakeClock(1_717_191_500L),
+                frameSender = GlassesFrameSender { _, _ -> throw IllegalStateException("capture ack send failed") },
+            ),
+        )
+
+        dispatcher.handleCommand(
+            LocalFrameHeader(
+                type = LocalMessageType.COMMAND,
+                requestId = "req_capture_2",
+                timestamp = 1_717_191_501L,
+                payload = cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand(
+                    timeoutMs = 30_000L,
+                    params = cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams(),
+                    transfer = cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer(
+                        transferId = "trf_capture_2",
+                        maxBytes = 4_096L,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(1, frames.size)
+        assertEquals(LocalMessageType.COMMAND_ERROR, frames.single().type)
+        val error = frames.single().payload as CommandError
+        assertEquals(LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED, error.error.code)
+        assertEquals("capture ack send failed", error.error.message)
     }
 
     private fun displayCommand(requestId: String) = LocalFrameHeader(

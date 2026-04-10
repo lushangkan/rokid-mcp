@@ -17,6 +17,7 @@ import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
 import cn.cutemc.rokidmcp.glasses.renderer.AppStateTextRenderer
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -74,17 +75,9 @@ class GlassesGatewayService : LifecycleService() {
             ),
         )
 
-        try {
-            controller = composition.controller
-            session = composition.session
-            composition.controller.start()
-            composition.session.start()
-        } catch (error: IllegalStateException) {
-            session = null
-            controller = null
-            composition.controller.markFailure(error.message ?: "glasses gateway failed to start")
-            Timber.tag("glasses-gateway").w(error, "glasses gateway start failed")
-        }
+        startActiveGlassesGatewayComposition(composition)
+        controller = composition.controller
+        session = composition.session
     }
 
     private suspend fun stopGateway(reason: String) {
@@ -158,4 +151,31 @@ internal fun createActiveGlassesGatewayComposition(
         session = session,
         commandDispatcher = commandDispatcher,
     )
+}
+
+internal suspend fun startActiveGlassesGatewayComposition(composition: ActiveGlassesGatewayComposition) {
+    try {
+        composition.controller.start()
+        composition.session.start()
+    } catch (error: Throwable) {
+        if (error !is CancellationException) {
+            Timber.tag("gateway-service").e(error, "failed to start glasses gateway composition")
+        }
+        rollbackFailedGatewayStart(composition)
+        throw error
+    }
+}
+
+private suspend fun rollbackFailedGatewayStart(composition: ActiveGlassesGatewayComposition) {
+    runCatching {
+        composition.session.stop("startup-failed")
+    }.onFailure { error ->
+        Timber.tag("gateway-service").w(error, "failed to stop glasses session after startup failure")
+    }
+
+    runCatching {
+        composition.controller.stop("startup-failed")
+    }.onFailure { error ->
+        Timber.tag("gateway-service").w(error, "failed to stop glasses controller after startup failure")
+    }
 }

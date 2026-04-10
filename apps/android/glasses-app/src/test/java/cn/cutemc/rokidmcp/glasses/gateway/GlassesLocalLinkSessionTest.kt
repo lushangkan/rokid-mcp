@@ -28,6 +28,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -215,6 +216,81 @@ class GlassesLocalLinkSessionTest {
         runCurrent()
 
         assertEquals(1, transport.startCount)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `transport start failure marks runtime error and allows retry`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport().apply {
+            startFailure = IllegalStateException("rfcomm start failed")
+        }
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_320L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_320L)),
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            kotlinx.coroutines.runBlocking { session.start() }
+        }
+        runCurrent()
+
+        assertEquals(GlassesRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("rfcomm start failed", runtimeStore.snapshot.value.lastErrorMessage)
+
+        transport.startFailure = null
+        session.start()
+        runCurrent()
+
+        assertEquals(2, transport.startCount)
+        assertEquals(GlassesRuntimeState.CONNECTING, runtimeStore.snapshot.value.runtimeState)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `hello ack send failure marks runtime error without reporting ready`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport().apply {
+            sendFailure = IllegalStateException("ack send failed")
+        }
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_330L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_330L)),
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(
+            GlassesTransportEvent.FrameReceived(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO,
+                    timestamp = 1_717_172_331L,
+                    payload = HelloPayload(
+                        role = LinkRole.PHONE,
+                        deviceId = "phone-device",
+                        appVersion = "1.0.0",
+                        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertTrue(transport.sentFrames.isEmpty())
+        assertEquals(GlassesRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
+        assertEquals("ack send failed", runtimeStore.snapshot.value.lastErrorMessage)
 
         session.stop("test complete")
     }
