@@ -126,7 +126,7 @@ private class PlatformRfcommClientSocketHandle(
     }
 }
 
-class AndroidRfcommServerTransport private constructor(
+class AndroidRfcommServerTransport internal constructor(
     private val permissionChecker: () -> Boolean,
     private val adapterProvider: () -> RfcommBluetoothAdapter?,
     private val ioDispatcher: CoroutineDispatcher,
