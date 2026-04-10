@@ -110,11 +110,11 @@ class OkHttpRelayWebSocketFactory(
 
         return object : RelayWebSocket {
             override fun sendText(text: String) {
-                socket?.send(text)
+                socket.send(text)
             }
 
             override fun close(code: Int, reason: String) {
-                socket?.close(code, reason)
+                socket.close(code, reason)
             }
         }
     }
@@ -130,6 +130,10 @@ class RelaySessionClient(
     private val controllerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val json: Json = RelayProtocolJson.default,
 ) {
+    private companion object {
+        const val LOG_TAG = "relay-session"
+    }
+
     private val internalEvents = MutableSharedFlow<RelaySessionEvent>(extraBufferCapacity = 32)
 
     val events: Flow<RelaySessionEvent> = internalEvents
@@ -142,10 +146,13 @@ class RelaySessionClient(
 
     suspend fun connect() {
         if (activeWebSocket == null) {
+            val relayUrl = buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required"))
+            Timber.tag(LOG_TAG).i("connecting relay websocket to %s", relayUrl.toSafeRelayUrlSummary())
             activeWebSocket = webSocketFactory.connect(
-                buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required")),
+                relayUrl,
                 object : RelayWebSocketCallbacks {
                     override fun onOpen() {
+                        Timber.tag(LOG_TAG).i("relay websocket opened")
                         controllerScope.launch { onConnected() }
                     }
 
@@ -154,10 +161,16 @@ class RelaySessionClient(
                     }
 
                     override fun onClosed(code: Int, reason: String) {
+                        Timber.tag(LOG_TAG).w("relay websocket closed code=%d reason=%s", code, reason.ifBlank { "(empty)" })
                         controllerScope.launch { onClosed(code, reason) }
                     }
 
                     override fun onFailure(error: Throwable) {
+                        Timber.tag(LOG_TAG).e(
+                            error,
+                            "relay websocket failure url=%s",
+                            relayUrl.toSafeRelayUrlSummary(),
+                        )
                         controllerScope.launch { onFailure(error) }
                     }
                 },
@@ -183,6 +196,13 @@ class RelaySessionClient(
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.CONNECTING))
 
         val snapshot = runtimeStore.snapshot.value
+        Timber.tag(LOG_TAG).i(
+            "sending relay HELLO deviceId=%s setupState=%s runtimeState=%s url=%s",
+            config.deviceId,
+            snapshot.setupState,
+            snapshot.runtimeState,
+            buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required")).toSafeRelayUrlSummary(),
+        )
         activeWebSocket?.sendText(
             json.encodeToString(
                 RelayHelloMessage.serializer(),
@@ -204,12 +224,14 @@ class RelaySessionClient(
     }
 
     suspend fun onTextMessage(text: String) {
-        val messageType = try {
-            text.toRelayMessageType(json)
+        val rawType = try {
+            text.toRelayRawMessageType(json)
         } catch (error: SerializationException) {
-            Timber.tag("relay-session").w(error, "failed to detect relay message type")
-            null
+            Timber.tag(LOG_TAG).e(error, "failed to parse relay websocket message envelope")
+            return
         }
+
+        val messageType = rawType?.toRelayMessageType()
 
         when (messageType) {
             RelayMessageType.HELLO_ACK -> {
@@ -221,10 +243,11 @@ class RelaySessionClient(
                         ?.jsonPrimitive
                         ?.contentOrNull
                 } catch (error: Exception) {
-                    Timber.tag("relay-session").w(error, "failed to extract relay sessionId from hello_ack")
+                    Timber.tag(LOG_TAG).e(error, "failed to extract relay sessionId from HELLO_ACK")
                     null
                 }
                 if (ackSessionId.isNullOrBlank()) {
+                    Timber.tag(LOG_TAG).e("relay HELLO_ACK failed: missing sessionId")
                     heartbeatJob?.cancel()
                     heartbeatJob = null
                     sessionId = null
@@ -236,7 +259,7 @@ class RelaySessionClient(
                 val ack = try {
                     json.decodeFromString(RelayHelloAckMessage.serializer(), text)
                 } catch (error: SerializationException) {
-                    Timber.tag("relay-session").e(error, "failed to decode relay hello_ack payload")
+                    Timber.tag(LOG_TAG).e(error, "relay HELLO_ACK failed: invalid payload")
                     heartbeatJob?.cancel()
                     heartbeatJob = null
                     sessionId = null
@@ -246,28 +269,50 @@ class RelaySessionClient(
                 }
 
                 sessionId = ackSessionId
-                heartbeatIntervalMs = ack.payload.heartbeatIntervalMs ?: heartbeatIntervalMs
+                heartbeatIntervalMs = ack.payload.heartbeatIntervalMs
+                Timber.tag(LOG_TAG).i(
+                    "relay HELLO_ACK accepted sessionId=%s heartbeatIntervalMs=%d",
+                    ackSessionId,
+                    heartbeatIntervalMs,
+                )
                 internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.ONLINE))
                 startHeartbeatLoop()
             }
 
             RelayMessageType.COMMAND -> {
+                val command = json.decodeFromString(CommandDispatchMessage.serializer(), text)
+                Timber.tag(LOG_TAG).i(
+                    "received relay command requestId=%s action=%s sessionId=%s",
+                    command.requestId,
+                    command.payload.action,
+                    command.sessionId,
+                )
                 internalEvents.emit(
                     RelaySessionEvent.CommandDispatched(
-                        json.decodeFromString(CommandDispatchMessage.serializer(), text),
+                        command,
                     ),
                 )
             }
 
             RelayMessageType.COMMAND_CANCEL -> {
+                val commandCancel = json.decodeFromString(CommandCancelMessage.serializer(), text)
+                Timber.tag(LOG_TAG).i(
+                    "received relay command_cancel requestId=%s action=%s sessionId=%s",
+                    commandCancel.requestId,
+                    commandCancel.payload.action,
+                    commandCancel.sessionId,
+                )
                 internalEvents.emit(
                     RelaySessionEvent.CommandCancelled(
-                        json.decodeFromString(CommandCancelMessage.serializer(), text),
+                        commandCancel,
                     ),
                 )
             }
 
-            else -> Unit
+            else -> Timber.tag(LOG_TAG).w(
+                "received relay message with unknown type=%s",
+                rawType ?: "(missing)",
+            )
         }
     }
 
@@ -279,7 +324,7 @@ class RelaySessionClient(
     }
 
     suspend fun onFailure(error: Throwable) {
-        Timber.tag("relay-session").e(error, "relay websocket failure")
+        Timber.tag(LOG_TAG).e(error, "relay websocket failure")
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
@@ -290,6 +335,14 @@ class RelaySessionClient(
 
     suspend fun sendHeartbeat(snapshot: PhoneRuntimeSnapshot) {
         val currentSessionId = sessionId ?: return
+        val nextHeartbeatSeq = heartbeatSeq
+        Timber.tag(LOG_TAG).v(
+            "sent relay heartbeat sessionId=%s seq=%d runtimeState=%s activeCommandRequestId=%s",
+            currentSessionId,
+            nextHeartbeatSeq,
+            snapshot.runtimeState,
+            snapshot.activeCommandRequestId ?: "none",
+        )
         activeWebSocket?.sendText(
             json.encodeToString(
                 RelayHeartbeatMessage.serializer(),
@@ -311,6 +364,13 @@ class RelaySessionClient(
 
     suspend fun sendPhoneStateUpdate(snapshot: PhoneRuntimeSnapshot) {
         val currentSessionId = sessionId ?: return
+        Timber.tag(LOG_TAG).i(
+            "sending relay phone_state_update sessionId=%s setupState=%s runtimeState=%s activeCommandRequestId=%s",
+            currentSessionId,
+            snapshot.setupState,
+            snapshot.runtimeState,
+            snapshot.activeCommandRequestId ?: "none",
+        )
         activeWebSocket?.sendText(
             json.encodeToString(
                 RelayPhoneStateUpdateMessage.serializer(),
@@ -332,6 +392,12 @@ class RelaySessionClient(
     }
 
     suspend fun sendCommandAck(requestId: String, payload: CommandAckPayload) {
+        Timber.tag(LOG_TAG).i(
+            "sending relay command_ack requestId=%s action=%s sessionId=%s",
+            requestId,
+            payload.action,
+            sessionId ?: "none",
+        )
         sendSessionMessage(
             serializer = CommandAckMessage.serializer(),
             message = CommandAckMessage(
@@ -345,6 +411,13 @@ class RelaySessionClient(
     }
 
     suspend fun sendCommandStatus(requestId: String, payload: CommandStatusPayload) {
+        Timber.tag(LOG_TAG).i(
+            "sending relay command_status requestId=%s action=%s status=%s sessionId=%s",
+            requestId,
+            payload.action,
+            payload.status,
+            sessionId ?: "none",
+        )
         sendSessionMessage(
             serializer = CommandStatusMessage.serializer(),
             message = CommandStatusMessage(
@@ -358,6 +431,12 @@ class RelaySessionClient(
     }
 
     suspend fun sendCommandResult(requestId: String, payload: CommandResultPayload) {
+        Timber.tag(LOG_TAG).i(
+            "sending relay command_result requestId=%s action=%s sessionId=%s",
+            requestId,
+            payload.result.action,
+            sessionId ?: "none",
+        )
         sendSessionMessage(
             serializer = CommandResultMessage.serializer(),
             message = CommandResultMessage(
@@ -371,6 +450,13 @@ class RelaySessionClient(
     }
 
     suspend fun sendCommandError(requestId: String, payload: CommandErrorPayload) {
+        Timber.tag(LOG_TAG).i(
+            "sending relay command_error requestId=%s action=%s errorCode=%s sessionId=%s",
+            requestId,
+            payload.action,
+            payload.error.code,
+            sessionId ?: "none",
+        )
         sendSessionMessage(
             serializer = CommandErrorMessage.serializer(),
             message = CommandErrorMessage(
@@ -385,6 +471,11 @@ class RelaySessionClient(
 
     private fun startHeartbeatLoop() {
         heartbeatJob?.cancel()
+        Timber.tag(LOG_TAG).i(
+            "starting relay heartbeat loop sessionId=%s intervalMs=%d",
+            sessionId ?: "none",
+            heartbeatIntervalMs,
+        )
         heartbeatJob = controllerScope.launch {
             while (true) {
                 delay(heartbeatIntervalMs)
@@ -441,14 +532,15 @@ class RelaySessionClient(
 
 }
 
-private fun String.toRelayMessageType(json: Json): RelayMessageType? {
-    val rawType = json.parseToJsonElement(this)
+private fun String.toRelayRawMessageType(json: Json): String? {
+    return json.parseToJsonElement(this)
         .jsonObject["type"]
         ?.jsonPrimitive
         ?.content
-        ?: return null
+}
 
-    return when (rawType) {
+private fun String.toRelayMessageType(): RelayMessageType? {
+    return when (this) {
         "hello" -> RelayMessageType.HELLO
         "hello_ack" -> RelayMessageType.HELLO_ACK
         "heartbeat" -> RelayMessageType.HEARTBEAT
@@ -461,4 +553,10 @@ private fun String.toRelayMessageType(json: Json): RelayMessageType? {
         "command_error" -> RelayMessageType.COMMAND_ERROR
         else -> null
     }
+}
+
+private fun String.toSafeRelayUrlSummary(): String {
+    val uri = URI(this)
+    val safePath = uri.path.orEmpty().ifBlank { "/" }
+    return URI(uri.scheme, null, uri.host, -1, safePath, null, null).toString()
 }
