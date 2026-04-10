@@ -1,9 +1,10 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
-import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import android.content.Context
+import cn.cutemc.rokidmcp.glasses.BluetoothPermission
 import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
@@ -53,7 +54,9 @@ interface RfcommServerTransport {
     suspend fun stop(reason: String)
 }
 
-class AndroidRfcommServerTransport : RfcommServerTransport {
+class AndroidRfcommServerTransport(
+    private val context: Context,
+) : RfcommServerTransport {
     private val internalState = MutableStateFlow(GlassesTransportState.IDLE)
     private val internalEvents = MutableSharedFlow<GlassesTransportEvent>(extraBufferCapacity = 32)
     private val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -69,8 +72,11 @@ class AndroidRfcommServerTransport : RfcommServerTransport {
     override val state: StateFlow<GlassesTransportState> = internalState
     override val events: Flow<GlassesTransportEvent> = internalEvents
 
-    @SuppressLint("MissingPermission")
     override suspend fun start() {
+        check(BluetoothPermission.hasRequiredPermission(context)) {
+            "bluetooth connect permission is not granted"
+        }
+
         val adapter = BluetoothAdapter.getDefaultAdapter()
             ?: throw IllegalStateException("bluetooth adapter is unavailable")
 

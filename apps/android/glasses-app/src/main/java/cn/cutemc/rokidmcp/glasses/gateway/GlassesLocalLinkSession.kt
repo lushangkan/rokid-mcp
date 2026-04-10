@@ -11,6 +11,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
 import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
 import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -46,7 +47,17 @@ class GlassesLocalLinkSession(
                 }
             }
         }
-        transport.start()
+        try {
+            transport.start()
+        } catch (error: CancellationException) {
+            eventJob?.cancelAndJoin()
+            eventJob = null
+            throw error
+        } catch (error: Throwable) {
+            eventJob?.cancelAndJoin()
+            eventJob = null
+            throw error
+        }
     }
 
     suspend fun stop(reason: String) {

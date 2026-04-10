@@ -19,6 +19,7 @@ import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class GlassesGatewayService : LifecycleService() {
     private var controller: GlassesAppController? = null
@@ -73,10 +74,17 @@ class GlassesGatewayService : LifecycleService() {
             ),
         )
 
-        controller = composition.controller
-        session = composition.session
-        composition.controller.start()
-        composition.session.start()
+        try {
+            controller = composition.controller
+            session = composition.session
+            composition.controller.start()
+            composition.session.start()
+        } catch (error: IllegalStateException) {
+            session = null
+            controller = null
+            composition.controller.markFailure(error.message ?: "glasses gateway failed to start")
+            Timber.tag("glasses-gateway").w(error, "glasses gateway start failed")
+        }
     }
 
     private suspend fun stopGateway(reason: String) {
@@ -111,7 +119,7 @@ internal fun createActiveGlassesGatewayComposition(
     app: GlassesApp,
     sessionScope: CoroutineScope,
     cameraAdapter: CameraAdapter,
-    transport: RfcommServerTransport = AndroidRfcommServerTransport(),
+    transport: RfcommServerTransport = AndroidRfcommServerTransport(app.applicationContext),
     clock: Clock = SystemClock,
 ): ActiveGlassesGatewayComposition {
     val controller = GlassesAppController(app.runtimeStore)
