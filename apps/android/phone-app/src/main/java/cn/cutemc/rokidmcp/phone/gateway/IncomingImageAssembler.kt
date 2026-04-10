@@ -7,6 +7,9 @@ import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
 import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
 import java.io.ByteArrayOutputStream
+import timber.log.Timber
+
+private const val IMAGE_ASSEMBLER_TAG = "image-assembler"
 
 data class AssembledImage(
     val requestId: String,
@@ -24,18 +27,25 @@ class IncomingImageAssembler {
 
     fun start(requestId: String, transferId: String, payload: ChunkStart) {
         if (state != null) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.COMMAND_SEQUENCE_INVALID,
                 message = "image assembly already in progress",
             )
         }
         if (payload.totalSize > LocalProtocolConstants.MAX_IMAGE_SIZE_BYTES) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.IMAGE_TOO_LARGE,
                 message = "image transfer exceeds local protocol limits",
             )
         }
 
+        Timber.tag(IMAGE_ASSEMBLER_TAG).i(
+            "starting image assembly requestId=$requestId transferId=$transferId totalSize=${payload.totalSize} width=${payload.width ?: 0} height=${payload.height ?: 0}",
+        )
         state = AssemblyState(
             requestId = requestId,
             transferId = transferId,
@@ -47,27 +57,36 @@ class IncomingImageAssembler {
     fun append(requestId: String, transferId: String, payload: ChunkData, body: ByteArray) {
         val current = requireState(requestId, transferId)
         if (payload.index != current.nextIndex) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.COMMAND_SEQUENCE_INVALID,
                 message = "expected chunk index ${current.nextIndex} but received ${payload.index}",
             )
         }
         if (payload.offset != current.writtenBytes) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.COMMAND_SEQUENCE_INVALID,
                 message = "expected chunk offset ${current.writtenBytes} but received ${payload.offset}",
             )
         }
         if (payload.size != body.size) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD,
                 message = "chunk body size ${body.size} does not match declared size ${payload.size}",
             )
         }
         if (!payload.chunkChecksum.equals(LocalProtocolChecksums.crc32(body), ignoreCase = true)) {
-            throw ImageAssemblyException(
+            throw checksumMismatch(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.IMAGE_CHECKSUM_MISMATCH,
                 message = "chunk body checksum does not match transfer metadata",
+                detail = " chunkIndex=${payload.index}",
             )
         }
 
@@ -75,8 +94,14 @@ class IncomingImageAssembler {
         current.nextIndex += 1
         current.writtenBytes += body.size.toLong()
 
+        Timber.tag(IMAGE_ASSEMBLER_TAG).v(
+            "received image chunk requestId=$requestId transferId=$transferId chunkIndex=${payload.index} writtenBytes=${current.writtenBytes} totalSize=${current.start.totalSize}",
+        )
+
         if (current.writtenBytes > current.start.totalSize) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.IMAGE_TRANSFER_INCOMPLETE,
                 message = "image transfer exceeded declared total size",
             )
@@ -87,13 +112,17 @@ class IncomingImageAssembler {
         val current = requireState(requestId, transferId)
         val bytes = current.buffer.toByteArray()
         if (payload.totalChunks != current.nextIndex) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.IMAGE_TRANSFER_INCOMPLETE,
                 message = "received ${current.nextIndex} chunks but expected ${payload.totalChunks}",
             )
         }
         if (payload.totalSize != current.writtenBytes || current.start.totalSize != current.writtenBytes) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.IMAGE_TRANSFER_INCOMPLETE,
                 message = "image transfer completed at ${current.writtenBytes} bytes but expected ${payload.totalSize}",
             )
@@ -102,13 +131,18 @@ class IncomingImageAssembler {
         val computedSha256 = LocalProtocolChecksums.sha256(bytes)
         val expectedHashes = listOfNotNull(current.start.sha256, payload.sha256).distinct()
         if (expectedHashes.any { !it.equals(computedSha256, ignoreCase = true) }) {
-            throw ImageAssemblyException(
+            throw checksumMismatch(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.IMAGE_CHECKSUM_MISMATCH,
                 message = "assembled image checksum does not match transfer metadata",
             )
         }
 
         state = null
+        Timber.tag(IMAGE_ASSEMBLER_TAG).i(
+            "assembled image successfully requestId=$requestId transferId=$transferId totalChunks=${payload.totalChunks} totalSize=${current.writtenBytes}",
+        )
         return AssembledImage(
             requestId = requestId,
             transferId = transferId,
@@ -126,12 +160,16 @@ class IncomingImageAssembler {
     }
 
     private fun requireState(requestId: String, transferId: String): AssemblyState {
-        val current = state ?: throw ImageAssemblyException(
+        val current = state ?: throw fail(
+            requestId = requestId,
+            transferId = transferId,
             code = LocalProtocolErrorCodes.COMMAND_SEQUENCE_INVALID,
             message = "no image assembly is currently active",
         )
         if (current.requestId != requestId || current.transferId != transferId) {
-            throw ImageAssemblyException(
+            throw fail(
+                requestId = requestId,
+                transferId = transferId,
                 code = LocalProtocolErrorCodes.COMMAND_SEQUENCE_INVALID,
                 message = "image transfer $transferId does not match the active assembly",
             )
@@ -147,6 +185,26 @@ class IncomingImageAssembler {
         var nextIndex: Int = 0,
         var writtenBytes: Long = 0L,
     )
+}
+
+private fun fail(requestId: String, transferId: String, code: String, message: String): ImageAssemblyException {
+    Timber.tag(IMAGE_ASSEMBLER_TAG).e(
+        "image assembly failed requestId=$requestId transferId=$transferId code=$code",
+    )
+    return ImageAssemblyException(code = code, message = message)
+}
+
+private fun checksumMismatch(
+    requestId: String,
+    transferId: String,
+    code: String,
+    message: String,
+    detail: String = "",
+): ImageAssemblyException {
+    Timber.tag(IMAGE_ASSEMBLER_TAG).w(
+        "image checksum mismatch requestId=$requestId transferId=$transferId code=$code$detail",
+    )
+    return ImageAssemblyException(code = code, message = message)
 }
 
 class ImageAssemblyException(
