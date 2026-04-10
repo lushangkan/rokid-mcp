@@ -1,10 +1,14 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
+import android.util.Log
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
+import cn.cutemc.rokidmcp.glasses.logging.assertLog
+import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.glasses.renderer.TextRenderer
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
@@ -20,6 +24,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -43,8 +48,10 @@ class CommandDispatcherTest {
             capturePhotoExecutor = testCapturePhotoExecutor(),
         )
 
-        dispatcher.handleCommand(displayCommand("req_display_1"))
-        runCurrent()
+        val logs = captureTimberLogs {
+            runBlocking { dispatcher.handleCommand(displayCommand("req_display_1")) }
+            runCurrent()
+        }
 
         assertEquals(
             listOf(
@@ -60,6 +67,13 @@ class CommandDispatcherTest {
         val result = frames[3].payload as DisplayTextResult
         assertTrue(result.result.displayed)
         assertEquals(3_000L, result.result.durationMs)
+        logs.assertLog(Log.INFO, "command-dispatch", "dispatcher entry requestId=req_display_1 payload=DisplayTextCommand")
+        logs.assertLog(Log.INFO, "command-dispatch", "selected display_text branch requestId=req_display_1")
+        logs.assertLog(Log.INFO, "command-dispatch", "sending command ack requestId=req_display_1")
+        logs.assertLog(Log.INFO, "command-dispatch", "sending executing status requestId=req_display_1")
+        logs.assertLog(Log.INFO, "command-dispatch", "sending displaying status requestId=req_display_1")
+        logs.assertLog(Log.INFO, "command-dispatch", "sending display_text result requestId=req_display_1")
+        logs.assertNoSensitiveData()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -79,14 +93,19 @@ class CommandDispatcherTest {
             capturePhotoExecutor = testCapturePhotoExecutor(),
         )
 
-        dispatcher.handleCommand(displayCommand("req_display_1"))
-        runCurrent()
-        dispatcher.handleCommand(displayCommand("req_display_2"))
-        runCurrent()
+        val logs = captureTimberLogs {
+            runBlocking { dispatcher.handleCommand(displayCommand("req_display_1")) }
+            runCurrent()
+            runBlocking { dispatcher.handleCommand(displayCommand("req_display_2")) }
+            runCurrent()
+        }
 
         assertEquals(LocalMessageType.COMMAND_ERROR, frames.last().type)
         val busy = frames.last().payload as CommandError
         assertEquals(LocalProtocolErrorCodes.COMMAND_BUSY, busy.error.code)
+        logs.assertLog(Log.WARN, "command-dispatch", "busy rejection requestId=req_display_2 action=DISPLAY_TEXT")
+        logs.assertLog(Log.WARN, "command-dispatch", "sending command error requestId=req_display_2 action=DISPLAY_TEXT code=COMMAND_BUSY")
+        logs.assertNoSensitiveData()
 
         gate.complete(Unit)
         runCurrent()
@@ -153,14 +172,19 @@ class CommandDispatcherTest {
             capturePhotoExecutor = testCapturePhotoExecutor(),
         )
 
-        dispatcher.handleCommand(displayCommand("req_display_4"))
-        runCurrent()
+        val logs = captureTimberLogs {
+            runBlocking { dispatcher.handleCommand(displayCommand("req_display_4")) }
+            runCurrent()
+        }
 
         assertEquals(1, frames.size)
         assertEquals(LocalMessageType.COMMAND_ERROR, frames.single().type)
         val error = frames.single().payload as CommandError
         assertEquals(LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED, error.error.code)
         assertEquals("ack send failed", error.error.message)
+        logs.assertLog(Log.ERROR, "command-dispatch", "display_text command failed for requestId=req_display_4")
+        logs.assertLog(Log.WARN, "command-dispatch", "sending command error requestId=req_display_4 action=DISPLAY_TEXT code=BLUETOOTH_SEND_FAILED")
+        logs.assertNoSensitiveData()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -194,28 +218,36 @@ class CommandDispatcherTest {
             ),
         )
 
-        dispatcher.handleCommand(
-            LocalFrameHeader(
-                type = LocalMessageType.COMMAND,
-                requestId = "req_capture_2",
-                timestamp = 1_717_191_501L,
-                payload = cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand(
-                    timeoutMs = 30_000L,
-                    params = cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams(),
-                    transfer = cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer(
-                        transferId = "trf_capture_2",
-                        maxBytes = 4_096L,
+        val logs = captureTimberLogs {
+            runBlocking {
+                dispatcher.handleCommand(
+                    LocalFrameHeader(
+                        type = LocalMessageType.COMMAND,
+                        requestId = "req_capture_2",
+                        timestamp = 1_717_191_501L,
+                        payload = cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand(
+                            timeoutMs = 30_000L,
+                            params = cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams(),
+                            transfer = cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer(
+                                transferId = "trf_capture_2",
+                                maxBytes = 4_096L,
+                            ),
+                        ),
                     ),
-                ),
-            ),
-        )
-        runCurrent()
+                )
+            }
+            runCurrent()
+        }
 
         assertEquals(1, frames.size)
         assertEquals(LocalMessageType.COMMAND_ERROR, frames.single().type)
         val error = frames.single().payload as CommandError
         assertEquals(LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED, error.error.code)
         assertEquals("capture ack send failed", error.error.message)
+        logs.assertLog(Log.INFO, "command-dispatch", "selected capture_photo branch requestId=req_capture_2")
+        logs.assertLog(Log.ERROR, "command-dispatch", "capture_photo command failed for requestId=req_capture_2")
+        logs.assertLog(Log.WARN, "command-dispatch", "sending command error requestId=req_capture_2 action=CAPTURE_PHOTO code=BLUETOOTH_SEND_FAILED")
+        logs.assertNoSensitiveData()
     }
 
     private fun displayCommand(requestId: String) = LocalFrameHeader(

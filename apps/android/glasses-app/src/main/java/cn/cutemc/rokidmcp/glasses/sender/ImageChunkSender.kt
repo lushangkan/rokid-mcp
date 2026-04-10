@@ -15,6 +15,8 @@ import kotlinx.coroutines.CancellationException
 import kotlin.math.min
 import timber.log.Timber
 
+private const val IMAGE_CHUNK_TAG = "image-chunk"
+
 fun interface GlassesFrameSender {
     suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?)
 }
@@ -44,6 +46,10 @@ class ImageChunkSender(
     ) {
         requireRequestMetadata(requestId, transferId)
         requireImageMetadata(imageBytes, width, height)
+
+        Timber.tag(IMAGE_CHUNK_TAG).i(
+            "image transfer start requestId=$requestId transferId=$transferId totalBytes=${imageBytes.size} width=$width height=$height",
+        )
 
         sendFrame(
             LocalFrameHeader(
@@ -83,6 +89,9 @@ class ImageChunkSender(
                 ),
                 chunkBytes,
             )
+            Timber.tag(IMAGE_CHUNK_TAG).v(
+                "image chunk progress requestId=$requestId transferId=$transferId index=$index offset=$offset size=${chunkBytes.size} sentBytes=$nextOffset totalBytes=${imageBytes.size}",
+            )
             offset = nextOffset
             index += 1
         }
@@ -100,6 +109,9 @@ class ImageChunkSender(
                     sha256 = sha256,
                 ),
             ),
+        )
+        Timber.tag(IMAGE_CHUNK_TAG).i(
+            "image transfer complete requestId=$requestId transferId=$transferId totalChunks=$index totalBytes=${imageBytes.size}",
         )
     }
 
@@ -147,7 +159,7 @@ class ImageChunkSender(
         } catch (error: ImageChunkSenderException) {
             throw error
         } catch (error: ProtocolCodecException) {
-            Timber.tag("image-chunk").e(
+            Timber.tag(IMAGE_CHUNK_TAG).e(
                 error,
                 "failed to encode image transfer frame type=${header.type} requestId=${header.requestId} transferId=${header.transferId}",
             )
@@ -157,7 +169,7 @@ class ImageChunkSender(
                 cause = error,
             )
         } catch (error: Exception) {
-            Timber.tag("image-chunk").e(
+            Timber.tag(IMAGE_CHUNK_TAG).e(
                 error,
                 "failed to send image transfer frame type=${header.type} requestId=${header.requestId} transferId=${header.transferId}",
             )

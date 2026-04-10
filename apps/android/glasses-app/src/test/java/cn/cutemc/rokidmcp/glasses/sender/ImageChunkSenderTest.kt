@@ -1,14 +1,20 @@
 package cn.cutemc.rokidmcp.glasses.sender
 
+import android.util.Log
 import cn.cutemc.rokidmcp.glasses.gateway.FakeClock
+import cn.cutemc.rokidmcp.glasses.logging.assertLog
+import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkData
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkEnd
 import cn.cutemc.rokidmcp.share.protocol.local.ChunkStart
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.local.LocalProtocolChecksums
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ImageChunkSenderTest {
@@ -22,14 +28,18 @@ class ImageChunkSenderTest {
         )
         val imageBytes = "abcdefghij".encodeToByteArray()
 
-        sender.send(
-            requestId = "req_capture_1",
-            transferId = "trf_capture_1",
-            imageBytes = imageBytes,
-            width = 800,
-            height = 600,
-            sha256 = "sha256-test",
-        )
+        val logs = captureTimberLogs {
+            runBlocking {
+                sender.send(
+                    requestId = "req_capture_1",
+                    transferId = "trf_capture_1",
+                    imageBytes = imageBytes,
+                    width = 800,
+                    height = 600,
+                    sha256 = "sha256-test",
+                )
+            }
+        }
 
         assertEquals(
             listOf(
@@ -66,5 +76,42 @@ class ImageChunkSenderTest {
         assertEquals(3, end.totalChunks)
         assertEquals(imageBytes.size.toLong(), end.totalSize)
         assertEquals("sha256-test", end.sha256)
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer start requestId=req_capture_1 transferId=trf_capture_1 totalBytes=10")
+        logs.assertLog(Log.VERBOSE, "image-chunk", "image chunk progress requestId=req_capture_1 transferId=trf_capture_1 index=0 offset=0 size=4 sentBytes=4 totalBytes=10")
+        logs.assertLog(Log.VERBOSE, "image-chunk", "image chunk progress requestId=req_capture_1 transferId=trf_capture_1 index=2 offset=8 size=2 sentBytes=10 totalBytes=10")
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer complete requestId=req_capture_1 transferId=trf_capture_1 totalChunks=3 totalBytes=10")
+        logs.assertNoSensitiveData()
+        assertTrue(logs.none { entry -> entry.message.contains("abcdefghij") })
+    }
+
+    @Test
+    fun `sender logs transfer failure with image chunk ownership`() = runTest {
+        val sender = ImageChunkSender(
+            clock = FakeClock(1_717_180_050L),
+            frameSender = GlassesFrameSender { _, _ -> throw IllegalStateException("link write failed") },
+            chunkSizeBytes = 4,
+        )
+
+        val logs = captureTimberLogs {
+            runBlocking {
+                try {
+                    sender.send(
+                        requestId = "req_capture_2",
+                        transferId = "trf_capture_2",
+                        imageBytes = "abcdefghij".encodeToByteArray(),
+                        width = 800,
+                        height = 600,
+                        sha256 = "sha256-test",
+                    )
+                } catch (_: ImageChunkSenderException) {
+                    Unit
+                }
+            }
+        }
+
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer start requestId=req_capture_2 transferId=trf_capture_2 totalBytes=10")
+        logs.assertLog(Log.ERROR, "image-chunk", "failed to send image transfer frame type=CHUNK_START requestId=req_capture_2 transferId=trf_capture_2")
+        logs.assertNoSensitiveData()
+        assertTrue(logs.none { entry -> entry.message.contains("abcdefghij") })
     }
 }

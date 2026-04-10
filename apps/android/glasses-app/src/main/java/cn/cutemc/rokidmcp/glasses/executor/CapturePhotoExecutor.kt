@@ -25,6 +25,8 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
 import kotlinx.coroutines.CancellationException
 import timber.log.Timber
 
+private const val CAPTURE_PHOTO_TAG = "capture-photo"
+
 class CapturePhotoExecutor(
     private val cameraAdapter: CameraAdapter,
     private val checksumCalculator: ChecksumCalculator,
@@ -33,18 +35,24 @@ class CapturePhotoExecutor(
     private val frameSender: GlassesFrameSender,
 ) {
     suspend fun execute(requestId: String, command: CapturePhotoCommand) {
+        Timber.tag(CAPTURE_PHOTO_TAG).i(
+            "capture_photo execution start requestId=$requestId transferId=${command.transfer.transferId}",
+        )
         sendAck(requestId)
         sendExecutingStatus(requestId)
         sendCapturingStatus(requestId)
 
+        Timber.tag(CAPTURE_PHOTO_TAG).i(
+            "camera capture start requestId=$requestId quality=${command.params.quality}",
+        )
         val capture = try {
             cameraAdapter.capture(command.params.quality)
         } catch (error: CameraCaptureException) {
-            Timber.tag("capture-photo").e(error, "camera capture failed for requestId=$requestId")
+            Timber.tag(CAPTURE_PHOTO_TAG).e(error, "camera capture failed requestId=$requestId")
             sendFailure(requestId, error.code, error.message, retryable = error.code == LocalProtocolErrorCodes.CAMERA_UNAVAILABLE)
             return
         } catch (error: IllegalArgumentException) {
-            Timber.tag("capture-photo").e(error, "camera returned invalid jpeg metadata for requestId=$requestId")
+            Timber.tag(CAPTURE_PHOTO_TAG).e(error, "camera returned invalid jpeg metadata requestId=$requestId")
             sendFailure(
                 requestId = requestId,
                 code = LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED,
@@ -56,7 +64,7 @@ class CapturePhotoExecutor(
             if (error is CancellationException) {
                 throw error
             }
-            Timber.tag("capture-photo").e(error, "unexpected camera capture failure for requestId=$requestId")
+            Timber.tag(CAPTURE_PHOTO_TAG).e(error, "unexpected camera capture failure requestId=$requestId")
             sendFailure(
                 requestId = requestId,
                 code = LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED,
@@ -65,6 +73,10 @@ class CapturePhotoExecutor(
             )
             return
         }
+
+        Timber.tag(CAPTURE_PHOTO_TAG).i(
+            "camera capture success requestId=$requestId transferId=${command.transfer.transferId} bytes=${capture.bytes.size} width=${capture.width} height=${capture.height}",
+        )
 
         val sha256 = checksumCalculator.sha256(capture.bytes)
 
@@ -79,22 +91,23 @@ class CapturePhotoExecutor(
                 sha256 = sha256,
             )
         } catch (error: CapturePhotoExecutionException) {
-            Timber.tag("capture-photo").e(
-                error,
-                "capture_photo validation failed for requestId=$requestId transferId=${command.transfer.transferId}",
+            Timber.tag(CAPTURE_PHOTO_TAG).w(
+                "capture_photo validation failed requestId=$requestId transferId=${command.transfer.transferId} code=${error.code}",
             )
             sendFailure(requestId, error.code, error.message, retryable = error.retryable)
             return
         } catch (error: ImageChunkSenderException) {
-            Timber.tag("capture-photo").e(
-                error,
-                "capture_photo image transfer failed for requestId=$requestId transferId=${command.transfer.transferId}",
+            Timber.tag(CAPTURE_PHOTO_TAG).w(
+                "capture_photo image transfer failed requestId=$requestId transferId=${command.transfer.transferId} code=${error.code}",
             )
             sendFailure(requestId, error.code, error.message, retryable = error.code == LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED)
             return
         }
 
         val completedAt = clock.nowMs()
+        Timber.tag(CAPTURE_PHOTO_TAG).i(
+            "sending capture_photo result requestId=$requestId transferId=${command.transfer.transferId}",
+        )
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_RESULT,
@@ -114,10 +127,14 @@ class CapturePhotoExecutor(
             ),
             null,
         )
+        Timber.tag(CAPTURE_PHOTO_TAG).i(
+            "capture_photo execution complete requestId=$requestId transferId=${command.transfer.transferId}",
+        )
     }
 
     private suspend fun sendAck(requestId: String) {
         val acceptedAt = clock.nowMs()
+        Timber.tag(CAPTURE_PHOTO_TAG).i("sending capture_photo ack requestId=$requestId")
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_ACK,
@@ -135,6 +152,7 @@ class CapturePhotoExecutor(
 
     private suspend fun sendExecutingStatus(requestId: String) {
         val statusAt = clock.nowMs()
+        Timber.tag(CAPTURE_PHOTO_TAG).i("sending capture_photo status=executing requestId=$requestId")
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_STATUS,
@@ -151,6 +169,7 @@ class CapturePhotoExecutor(
 
     private suspend fun sendCapturingStatus(requestId: String) {
         val statusAt = clock.nowMs()
+        Timber.tag(CAPTURE_PHOTO_TAG).i("sending capture_photo status=capturing requestId=$requestId")
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_STATUS,
@@ -169,6 +188,9 @@ class CapturePhotoExecutor(
         retryable: Boolean,
     ) {
         val failedAt = clock.nowMs()
+        Timber.tag(CAPTURE_PHOTO_TAG).w(
+            "sending capture_photo error requestId=$requestId code=$code retryable=$retryable",
+        )
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_ERROR,

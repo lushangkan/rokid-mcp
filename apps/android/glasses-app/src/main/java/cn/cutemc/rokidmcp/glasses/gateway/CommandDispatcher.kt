@@ -23,6 +23,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
+private const val COMMAND_DISPATCH_TAG = "command-dispatch"
+
 class CommandDispatcher(
     private val clock: Clock,
     private val scope: CoroutineScope,
@@ -44,10 +46,25 @@ class CommandDispatcher(
         }
 
         val requestId = header.requestId ?: return
+        Timber.tag(COMMAND_DISPATCH_TAG).i(
+            "dispatcher entry requestId=$requestId payload=${header.payload.javaClass.simpleName}",
+        )
+
         when (val payload = header.payload) {
-            is DisplayTextCommand -> dispatchDisplayText(requestId, payload)
-            is CapturePhotoCommand -> dispatchCapturePhoto(requestId, payload)
+            is DisplayTextCommand -> {
+                Timber.tag(COMMAND_DISPATCH_TAG).i("selected display_text branch requestId=$requestId")
+                dispatchDisplayText(requestId, payload)
+            }
+
+            is CapturePhotoCommand -> {
+                Timber.tag(COMMAND_DISPATCH_TAG).i("selected capture_photo branch requestId=$requestId")
+                dispatchCapturePhoto(requestId, payload)
+            }
+
             else -> {
+                Timber.tag(COMMAND_DISPATCH_TAG).w(
+                    "rejecting unsupported command payload requestId=$requestId payload=${payload.javaClass.simpleName}",
+                )
                 try {
                     sendCommandError(
                         requestId = requestId,
@@ -59,7 +76,7 @@ class CommandDispatcher(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
-                    Timber.tag("command-dispatch").e(
+                    Timber.tag(COMMAND_DISPATCH_TAG).e(
                         error,
                         "failed to reject unsupported command payload for requestId=$requestId",
                     )
@@ -76,6 +93,9 @@ class CommandDispatcher(
 
     private suspend fun dispatchDisplayText(requestId: String, command: DisplayTextCommand) {
         if (!exclusiveGuard.tryAcquire(requestId)) {
+            Timber.tag(COMMAND_DISPATCH_TAG).w(
+                "busy rejection requestId=$requestId action=${command.action}",
+            )
             sendCommandBusy(requestId, command.action)
             return
         }
@@ -85,12 +105,14 @@ class CommandDispatcher(
                 sendCommandAck(requestId, command.action)
                 sendExecutingStatus(requestId, command.action)
                 sendDisplayingStatus(requestId)
-                val result = displayTextExecutor.execute(command)
+                val result = displayTextExecutor.execute(requestId = requestId, command = command)
                 sendDisplayTextResult(requestId, result)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: DisplayTextExecutionException) {
-                Timber.tag("command-dispatch").e(error, "display_text command failed for requestId=$requestId")
+                Timber.tag(COMMAND_DISPATCH_TAG).w(
+                    "display_text command failed requestId=$requestId code=${error.code}",
+                )
                 sendCommandError(
                     requestId = requestId,
                     action = command.action,
@@ -117,6 +139,9 @@ class CommandDispatcher(
 
     private suspend fun dispatchCapturePhoto(requestId: String, command: CapturePhotoCommand) {
         if (!exclusiveGuard.tryAcquire(requestId)) {
+            Timber.tag(COMMAND_DISPATCH_TAG).w(
+                "busy rejection requestId=$requestId action=${command.action}",
+            )
             sendCommandBusy(requestId, command.action)
             return
         }
@@ -144,6 +169,7 @@ class CommandDispatcher(
     }
 
     private suspend fun sendCommandAck(requestId: String, action: CommandAction) {
+        Timber.tag(COMMAND_DISPATCH_TAG).i("sending command ack requestId=$requestId action=$action")
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_ACK,
@@ -160,6 +186,7 @@ class CommandDispatcher(
     }
 
     private suspend fun sendExecutingStatus(requestId: String, action: CommandAction) {
+        Timber.tag(COMMAND_DISPATCH_TAG).i("sending executing status requestId=$requestId action=$action")
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_STATUS,
@@ -175,6 +202,7 @@ class CommandDispatcher(
     }
 
     private suspend fun sendDisplayingStatus(requestId: String) {
+        Timber.tag(COMMAND_DISPATCH_TAG).i("sending displaying status requestId=$requestId")
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_STATUS,
@@ -187,6 +215,9 @@ class CommandDispatcher(
     }
 
     private suspend fun sendDisplayTextResult(requestId: String, result: DisplayTextResult) {
+        Timber.tag(COMMAND_DISPATCH_TAG).i(
+            "sending display_text result requestId=$requestId displayed=${result.result.displayed}",
+        )
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_RESULT,
@@ -215,6 +246,9 @@ class CommandDispatcher(
         message: String,
         retryable: Boolean,
     ) {
+        Timber.tag(COMMAND_DISPATCH_TAG).w(
+            "sending command error requestId=$requestId action=$action code=$code retryable=$retryable",
+        )
         frameSender.send(
             LocalFrameHeader(
                 type = LocalMessageType.COMMAND_ERROR,
@@ -243,7 +277,7 @@ class CommandDispatcher(
         sendErrorContext: String,
         error: Throwable,
     ) {
-        Timber.tag("command-dispatch").e(error, failureContext)
+        Timber.tag(COMMAND_DISPATCH_TAG).e(error, failureContext)
         runCatching {
             sendCommandError(
                 requestId = requestId,
@@ -253,7 +287,7 @@ class CommandDispatcher(
                 retryable = true,
             )
         }.onFailure { sendError ->
-            Timber.tag("command-dispatch").e(sendError, sendErrorContext)
+            Timber.tag(COMMAND_DISPATCH_TAG).e(sendError, sendErrorContext)
         }
     }
 }

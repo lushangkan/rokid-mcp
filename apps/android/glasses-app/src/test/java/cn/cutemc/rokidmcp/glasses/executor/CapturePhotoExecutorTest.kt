@@ -1,10 +1,14 @@
 package cn.cutemc.rokidmcp.glasses.executor
 
+import android.util.Log
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
 import cn.cutemc.rokidmcp.glasses.camera.CameraCaptureException
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.gateway.FakeClock
+import cn.cutemc.rokidmcp.glasses.logging.assertLog
+import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.glasses.sender.GlassesFrameSender
 import cn.cutemc.rokidmcp.glasses.sender.ImageChunkSender
 import cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality
@@ -22,6 +26,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -52,7 +57,7 @@ class CapturePhotoExecutorTest {
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
         )
 
-        executor.execute(requestId = "req_capture_1", command = captureCommand(maxBytes = 4096))
+        val logs = captureTimberLogs { runBlocking { executor.execute(requestId = "req_capture_1", command = captureCommand(maxBytes = 4096)) } }
 
         assertEquals(
             listOf(
@@ -83,6 +88,18 @@ class CapturePhotoExecutorTest {
         assertEquals(480, result.result.height)
         assertEquals(imageBytes.size.toLong(), result.result.size)
         assertEquals(ChecksumCalculator().sha256(imageBytes), result.result.sha256)
+        logs.assertLog(Log.INFO, "capture-photo", "capture_photo execution start requestId=req_capture_1 transferId=trf_capture_1")
+        logs.assertLog(Log.INFO, "capture-photo", "sending capture_photo ack requestId=req_capture_1")
+        logs.assertLog(Log.INFO, "capture-photo", "sending capture_photo status=executing requestId=req_capture_1")
+        logs.assertLog(Log.INFO, "capture-photo", "sending capture_photo status=capturing requestId=req_capture_1")
+        logs.assertLog(Log.INFO, "capture-photo", "camera capture start requestId=req_capture_1")
+        logs.assertLog(Log.INFO, "capture-photo", "camera capture success requestId=req_capture_1 transferId=trf_capture_1")
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer start requestId=req_capture_1 transferId=trf_capture_1")
+        logs.assertLog(Log.VERBOSE, "image-chunk", "image chunk progress requestId=req_capture_1 transferId=trf_capture_1 index=0")
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer complete requestId=req_capture_1 transferId=trf_capture_1 totalChunks=3")
+        logs.assertLog(Log.INFO, "capture-photo", "sending capture_photo result requestId=req_capture_1 transferId=trf_capture_1")
+        logs.assertLog(Log.INFO, "capture-photo", "capture_photo execution complete requestId=req_capture_1 transferId=trf_capture_1")
+        logs.assertNoSensitiveData()
     }
 
     @Test
@@ -106,7 +123,7 @@ class CapturePhotoExecutorTest {
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
         )
 
-        executor.execute(requestId = "req_capture_2", command = captureCommand(maxBytes = 4096))
+        val logs = captureTimberLogs { runBlocking { executor.execute(requestId = "req_capture_2", command = captureCommand(maxBytes = 4096)) } }
 
         assertEquals(LocalMessageType.COMMAND_ERROR, commandFrames.last().first.type)
         val error = commandFrames.last().first.payload as CommandError
@@ -114,6 +131,9 @@ class CapturePhotoExecutorTest {
         assertTrue(error.error.retryable)
         assertTrue(commandFrames.none { it.first.type == LocalMessageType.COMMAND_RESULT })
         assertTrue(chunkFrames.isEmpty())
+        logs.assertLog(Log.ERROR, "capture-photo", "camera capture failed requestId=req_capture_2")
+        logs.assertLog(Log.WARN, "capture-photo", "sending capture_photo error requestId=req_capture_2 code=CAMERA_UNAVAILABLE retryable=true")
+        logs.assertNoSensitiveData()
     }
 
     @Test
@@ -138,16 +158,23 @@ class CapturePhotoExecutorTest {
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
         )
 
-        executor.execute(
-            requestId = "req_capture_3",
-            command = captureCommand(maxBytes = 4096, mediaType = "image/png"),
-        )
+        val logs = captureTimberLogs {
+            runBlocking {
+                executor.execute(
+                    requestId = "req_capture_3",
+                    command = captureCommand(maxBytes = 4096, mediaType = "image/png"),
+                )
+            }
+        }
 
         assertEquals(LocalMessageType.COMMAND_ERROR, commandFrames.last().first.type)
         val error = commandFrames.last().first.payload as CommandError
         assertEquals(LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL, error.error.code)
         assertTrue(commandFrames.none { it.first.type == LocalMessageType.COMMAND_RESULT })
         assertTrue(chunkFrames.isEmpty())
+        logs.assertLog(Log.WARN, "capture-photo", "capture_photo validation failed requestId=req_capture_3 transferId=trf_capture_1 code=UNSUPPORTED_PROTOCOL")
+        logs.assertLog(Log.WARN, "capture-photo", "sending capture_photo error requestId=req_capture_3 code=UNSUPPORTED_PROTOCOL retryable=false")
+        logs.assertNoSensitiveData()
     }
 
     @Test
@@ -171,13 +198,17 @@ class CapturePhotoExecutorTest {
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
         )
 
-        executor.execute(requestId = "req_capture_4", command = captureCommand(maxBytes = 4096))
+        val logs = captureTimberLogs { runBlocking { executor.execute(requestId = "req_capture_4", command = captureCommand(maxBytes = 4096)) } }
 
         assertEquals(LocalMessageType.COMMAND_ERROR, commandFrames.last().first.type)
         val error = commandFrames.last().first.payload as CommandError
         assertEquals(LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED, error.error.code)
         assertTrue(error.error.retryable)
         assertTrue(commandFrames.none { it.first.type == LocalMessageType.COMMAND_RESULT })
+        logs.assertLog(Log.ERROR, "image-chunk", "failed to send image transfer frame type=CHUNK_START requestId=req_capture_4 transferId=trf_capture_1")
+        logs.assertLog(Log.WARN, "capture-photo", "capture_photo image transfer failed requestId=req_capture_4 transferId=trf_capture_1 code=BLUETOOTH_SEND_FAILED")
+        logs.assertLog(Log.WARN, "capture-photo", "sending capture_photo error requestId=req_capture_4 code=BLUETOOTH_SEND_FAILED retryable=true")
+        logs.assertNoSensitiveData()
     }
 
     @Test
@@ -196,13 +227,16 @@ class CapturePhotoExecutorTest {
             frameSender = GlassesFrameSender { header, body -> commandFrames += header to body },
         )
 
-        executor.execute(requestId = "req_capture_5", command = captureCommand(maxBytes = 4096))
+        val logs = captureTimberLogs { runBlocking { executor.execute(requestId = "req_capture_5", command = captureCommand(maxBytes = 4096)) } }
 
         assertEquals(LocalMessageType.COMMAND_ERROR, commandFrames.last().first.type)
         val error = commandFrames.last().first.payload as CommandError
         assertEquals(LocalProtocolErrorCodes.CAMERA_CAPTURE_FAILED, error.error.code)
         assertEquals("disk read failed", error.error.message)
         assertTrue(commandFrames.none { it.first.type == LocalMessageType.COMMAND_RESULT })
+        logs.assertLog(Log.ERROR, "capture-photo", "unexpected camera capture failure requestId=req_capture_5")
+        logs.assertLog(Log.WARN, "capture-photo", "sending capture_photo error requestId=req_capture_5 code=CAMERA_CAPTURE_FAILED retryable=false")
+        logs.assertNoSensitiveData()
     }
 
     @Test(expected = CancellationException::class)
