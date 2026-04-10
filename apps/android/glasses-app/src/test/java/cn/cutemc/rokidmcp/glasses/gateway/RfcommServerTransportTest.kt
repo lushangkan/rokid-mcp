@@ -1,0 +1,318 @@
+package cn.cutemc.rokidmcp.glasses.gateway
+
+import android.bluetooth.BluetoothDevice
+import android.util.Log
+import cn.cutemc.rokidmcp.glasses.logging.CapturingTimberTree
+import cn.cutemc.rokidmcp.glasses.logging.assertLog
+import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
+import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.UUID
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RfcommServerTransportTest {
+    private val codec = DefaultLocalFrameCodec()
+
+    @Test
+    fun `start logs permission denial with rfcomm-server tag`() {
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { false },
+            adapterProvider = { error("adapter should not be requested") },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+
+        val logs = captureTimberLogs {
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { transport.start() }
+            }
+        }
+
+        transportScope.cancel()
+
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "validating BLUETOOTH_CONNECT permission")
+        logs.assertLog(Log.WARN, RFCOMM_SERVER_TAG, "BLUETOOTH_CONNECT permission denied")
+        assertEquals(GlassesTransportState.IDLE, transport.state.value)
+    }
+
+    @Test
+    fun `transport traces listen accept frame metadata disconnect and cleanup with masked addresses`() {
+        val serverSocket = FakeServerSocket()
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = { FakeRfcommBluetoothAdapter(serverSocket) },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+        val unbondedClient = FakeClientSocket(
+            remoteDevice = RfcommRemoteDeviceInfo(
+                address = "AA:BB:CC:DD:EE:FF",
+                bondState = BluetoothDevice.BOND_NONE,
+            ),
+            input = ControlledInputStream(),
+            output = RecordingOutputStream(),
+        )
+        val bondedInput = ControlledInputStream()
+        val bondedOutput = RecordingOutputStream()
+        val bondedClient = FakeClientSocket(
+            remoteDevice = RfcommRemoteDeviceInfo(
+                address = "12:34:56:78:9A:BC",
+                bondState = BluetoothDevice.BOND_BONDED,
+            ),
+            input = bondedInput,
+            output = bondedOutput,
+        )
+        val sendHeader = LocalFrameHeader(
+            type = LocalMessageType.PONG,
+            timestamp = 101L,
+            payload = PongPayload(seq = 7L, nonce = "pong-7"),
+        )
+        val receivedHeader = LocalFrameHeader(
+            type = LocalMessageType.PING,
+            timestamp = 102L,
+            payload = PingPayload(seq = 8L, nonce = "ping-8"),
+        )
+
+        val logs = captureTimberLogs { tree ->
+            serverSocket.enqueueAcceptedClient(unbondedClient)
+            serverSocket.enqueueAcceptedClient(bondedClient)
+
+            runBlocking { transport.start() }
+
+            waitUntil("transport listening") {
+                transport.state.value == GlassesTransportState.LISTENING &&
+                    tree.logs.any { entry -> entry.message.contains("state -> LISTENING") }
+            }
+            waitUntil("unbonded client rejection") {
+                tree.logs.any { entry -> entry.message.contains("rejected unbonded RFCOMM client") }
+            }
+            waitUntil("bonded client attach") {
+                transport.state.value == GlassesTransportState.CONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> CONNECTED") }
+            }
+
+            runBlocking { transport.send(sendHeader) }
+
+            bondedInput.enqueue(codec.encode(receivedHeader))
+            waitUntil("received frame log") {
+                tree.logs.any { entry -> entry.message.contains("frame received type=PING") }
+            }
+
+            bondedInput.finish()
+            waitUntil("client disconnect") {
+                transport.state.value == GlassesTransportState.LISTENING &&
+                    tree.logs.any { entry -> entry.message.contains("RFCOMM client disconnected") }
+            }
+
+            runBlocking { transport.stop("test-stop") }
+            waitUntil("transport stopped") {
+                transport.state.value == GlassesTransportState.DISCONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> DISCONNECTED") }
+            }
+        }
+
+        transportScope.cancel()
+
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "validating BLUETOOTH_CONNECT permission")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "checking bluetooth adapter availability")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "creating RFCOMM listen socket")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "RFCOMM listen socket created")
+        logs.assertLog(Log.INFO, RFCOMM_SERVER_TAG, "state -> LISTENING")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "waiting for RFCOMM client")
+        logs.assertLog(Log.WARN, RFCOMM_SERVER_TAG, "rejected unbonded RFCOMM client device=**:**:**:**:EE:FF")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "accepted bonded RFCOMM client device=**:**:**:**:9A:BC")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "attaching RFCOMM client device=**:**:**:**:9A:BC")
+        logs.assertLog(Log.INFO, RFCOMM_SERVER_TAG, "state -> CONNECTED")
+        logs.assertLog(Log.VERBOSE, RFCOMM_SERVER_TAG, "frame sent type=PONG")
+        logs.assertLog(Log.VERBOSE, RFCOMM_SERVER_TAG, "frame received type=PING")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "RFCOMM client disconnected")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "cleaning up RFCOMM sockets reason=stop:test-stop")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "state -> DISCONNECTED")
+        logs.assertNoSensitiveData()
+        assertTrue(logs.none { entry -> "AA:BB:CC:DD:EE:FF" in entry.message })
+        assertTrue(logs.none { entry -> "12:34:56:78:9A:BC" in entry.message })
+        assertTrue(bondedOutput.writtenBytes.isNotEmpty())
+    }
+
+    @Test
+    fun `start logs listen socket failure and transitions to error`() {
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = {
+                object : RfcommBluetoothAdapter {
+                    override fun listen(serviceName: String, serviceUuid: UUID): RfcommServerSocketHandle {
+                        throw IOException("listen boom")
+                    }
+                }
+            },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+
+        val logs = captureTimberLogs {
+            assertThrows(IOException::class.java) {
+                runBlocking { transport.start() }
+            }
+        }
+
+        transportScope.cancel()
+
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "creating RFCOMM listen socket")
+        logs.assertLog(Log.ERROR, RFCOMM_SERVER_TAG, "failed to start RFCOMM server transport")
+        logs.assertLog(Log.ERROR, RFCOMM_SERVER_TAG, "state -> ERROR")
+        assertEquals(GlassesTransportState.ERROR, transport.state.value)
+    }
+}
+
+private const val RFCOMM_SERVER_TAG = "rfcomm-server"
+
+private class FakeRfcommBluetoothAdapter(
+    private val serverSocket: RfcommServerSocketHandle,
+) : RfcommBluetoothAdapter {
+    override fun listen(serviceName: String, serviceUuid: UUID): RfcommServerSocketHandle = serverSocket
+}
+
+private class FakeServerSocket : RfcommServerSocketHandle {
+    private sealed interface AcceptAction {
+        data class Return(val clientSocket: RfcommClientSocketHandle) : AcceptAction
+
+        data object Close : AcceptAction
+    }
+
+    private val acceptActions = LinkedBlockingQueue<AcceptAction>()
+    @Volatile
+    private var closed = false
+
+    fun enqueueAcceptedClient(clientSocket: RfcommClientSocketHandle) {
+        acceptActions.put(AcceptAction.Return(clientSocket))
+    }
+
+    override fun accept(): RfcommClientSocketHandle {
+        while (!closed) {
+            when (val action = acceptActions.poll(100, TimeUnit.MILLISECONDS) ?: continue) {
+                is AcceptAction.Return -> return action.clientSocket
+                AcceptAction.Close -> throw IOException("server socket closed")
+            }
+        }
+
+        throw IOException("server socket closed")
+    }
+
+    override fun close() {
+        closed = true
+        acceptActions.offer(AcceptAction.Close)
+    }
+}
+
+private class FakeClientSocket(
+    override val remoteDevice: RfcommRemoteDeviceInfo?,
+    private val input: ControlledInputStream,
+    private val output: RecordingOutputStream,
+) : RfcommClientSocketHandle {
+    override val inputStream: InputStream
+        get() = input
+
+    override val outputStream: OutputStream
+        get() = output
+
+    override fun close() {
+        input.close()
+        output.close()
+    }
+}
+
+private class ControlledInputStream : InputStream() {
+    private sealed interface ReadAction {
+        data class Bytes(val value: ByteArray) : ReadAction
+
+        data object End : ReadAction
+    }
+
+    private val readActions = LinkedBlockingQueue<ReadAction>()
+    @Volatile
+    private var closed = false
+
+    fun enqueue(bytes: ByteArray) {
+        readActions.put(ReadAction.Bytes(bytes))
+    }
+
+    fun finish() {
+        readActions.put(ReadAction.End)
+    }
+
+    override fun read(): Int {
+        throw UnsupportedOperationException("use read(byteArray)")
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        while (!closed) {
+            when (val action = readActions.poll(100, TimeUnit.MILLISECONDS) ?: continue) {
+                is ReadAction.Bytes -> {
+                    check(action.value.size <= length) {
+                        "test input frame ${action.value.size} exceeds buffer length $length"
+                    }
+                    action.value.copyInto(buffer, destinationOffset = offset)
+                    return action.value.size
+                }
+
+                ReadAction.End -> {
+                    closed = true
+                    return -1
+                }
+            }
+        }
+
+        return -1
+    }
+
+    override fun close() {
+        closed = true
+        readActions.offer(ReadAction.End)
+    }
+}
+
+private class RecordingOutputStream : ByteArrayOutputStream() {
+    val writtenBytes: ByteArray
+        get() = toByteArray()
+}
+
+private fun waitUntil(
+    description: String,
+    timeoutMillis: Long = 2_000L,
+    condition: () -> Boolean,
+) {
+    val deadline = System.currentTimeMillis() + timeoutMillis
+    while (System.currentTimeMillis() < deadline) {
+        if (condition()) {
+            return
+        }
+
+        Thread.sleep(10L)
+    }
+
+    throw AssertionError("Timed out waiting for $description")
+}
