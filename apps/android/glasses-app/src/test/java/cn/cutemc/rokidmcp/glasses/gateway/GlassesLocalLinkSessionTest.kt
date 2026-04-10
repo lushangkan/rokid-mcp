@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class GlassesLocalLinkSessionTest {
@@ -214,6 +215,39 @@ class GlassesLocalLinkSessionTest {
         runCurrent()
 
         assertEquals(1, transport.startCount)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `start failure cleans up collection job and allows retry`() = runTest {
+        val runtimeStore = GlassesRuntimeStore()
+        val controller = GlassesAppController(runtimeStore = runtimeStore)
+        val transport = FakeRfcommServerTransport().apply {
+            startFailure = IllegalStateException("bluetooth connect permission is not granted")
+        }
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = controller,
+            clock = FakeClock(1_717_172_320L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_320L)),
+        )
+
+        try {
+            session.start()
+            fail("Expected start to fail when transport.start throws")
+        } catch (error: IllegalStateException) {
+            assertEquals("bluetooth connect permission is not granted", error.message)
+        }
+        runCurrent()
+
+        transport.startFailure = null
+        session.start()
+        runCurrent()
+
+        assertEquals(2, transport.startCount)
 
         session.stop("test complete")
     }
