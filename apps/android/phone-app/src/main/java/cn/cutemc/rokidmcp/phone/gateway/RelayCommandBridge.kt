@@ -92,9 +92,8 @@ class RelayCommandBridge(
         val active = try {
             activeCommandRegistry.begin(message)
         } catch (error: ActiveCommandRegistryException) {
-            Timber.tag("relay-command").e(
-                error,
-                "failed to register active relay command requestId=${message.requestId} action=${message.payload.action}",
+            Timber.tag(RELAY_COMMAND_TAG).e(
+                "failed to register active relay command requestId=${message.requestId} action=${message.payload.action} code=${error.code}",
             )
             relaySessionClient.sendCommandError(
                 requestId = message.requestId,
@@ -139,9 +138,8 @@ class RelayCommandBridge(
                 ),
             )
         } catch (error: Exception) {
-            Timber.tag("relay-command").e(
-                error,
-                "failed to forward relay command requestId=${active.requestId} action=${active.action} to glasses",
+            Timber.tag(RELAY_COMMAND_TAG).e(
+                "failed to forward relay command requestId=${active.requestId} action=${active.action} errorType=${error.javaClass.simpleName}",
             )
             sendTerminalError(
                 active = active,
@@ -184,23 +182,23 @@ class RelayCommandBridge(
                 else -> Unit
             }
         } catch (error: ActiveCommandRegistryException) {
-            Timber.tag("relay-command").e(
-                error,
-                "local command state validation failed for requestId=$requestId frameType=${header.type}",
+            Timber.tag(RELAY_COMMAND_TAG).e(
+                "local command state validation failed for requestId=$requestId frameType=${header.type} code=${error.code}",
             )
             val active = activeCommandRegistry.activeOrNull() ?: return
             sendTerminalError(active, error.code, error.message, retryable = true)
             clearActiveCommand(code = error.code, message = error.message)
         } catch (error: ImageAssemblyException) {
-            Timber.tag("relay-command").e(
-                error,
-                "image assembly failed for requestId=$requestId frameType=${header.type}",
+            Timber.tag(RELAY_COMMAND_TAG).e(
+                "image assembly failed for requestId=$requestId frameType=${header.type} code=${error.code}",
             )
             val active = activeCommandRegistry.activeOrNull() ?: return
             sendTerminalError(active, error.code, error.message, retryable = false)
             clearActiveCommand(code = error.code, message = error.message)
         } catch (error: RelayImageUploadException) {
-            Timber.tag("relay-command").e(error, "relay image upload failed for requestId=$requestId")
+            Timber.tag(RELAY_COMMAND_TAG).e(
+                "relay image upload failed for requestId=$requestId code=${error.code} retryable=${error.retryable}",
+            )
             val active = activeCommandRegistry.activeOrNull() ?: return
             sendTerminalError(active, error.code, error.message, retryable = error.retryable)
             clearActiveCommand(code = error.code, message = error.message)

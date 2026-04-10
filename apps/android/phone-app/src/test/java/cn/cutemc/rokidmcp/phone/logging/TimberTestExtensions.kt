@@ -54,7 +54,7 @@ class CapturingTimberTree : Timber.Tree() {
     }
 }
 
-fun captureTimberLogs(block: (CapturingTimberTree) -> Unit): List<CapturingTimberTree.LogEntry> {
+suspend fun captureTimberLogs(block: suspend (CapturingTimberTree) -> Unit): List<CapturingTimberTree.LogEntry> {
     val tree = CapturingTimberTree()
     Timber.plant(tree)
 
@@ -81,13 +81,25 @@ fun List<CapturingTimberTree.LogEntry>.assertLog(priority: Int, tag: String, mes
 }
 
 fun List<CapturingTimberTree.LogEntry>.assertNoSensitiveData() {
-    val sensitivePatterns = listOf("authToken", "Authorization", "Bearer ", "imageBytes", "chunkBytes")
+    val sensitivePatterns = listOf(
+        "authToken",
+        "Authorization",
+        "Bearer ",
+        "imageBytes",
+        "chunkBytes",
+        "uploadToken=",
+    )
 
     for (entry in this) {
+        val throwableMessage = entry.throwable?.message.orEmpty()
         for (pattern in sensitivePatterns) {
             assertTrue(
                 "Log contains sensitive data '$pattern': ${entry.message}",
                 !entry.message.contains(pattern),
+            )
+            assertTrue(
+                "Throwable contains sensitive data '$pattern': $throwableMessage",
+                !throwableMessage.contains(pattern),
             )
         }
     }
