@@ -17,6 +17,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.ExecutingCommandStatus
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -46,13 +47,24 @@ class CommandDispatcher(
         when (val payload = header.payload) {
             is DisplayTextCommand -> dispatchDisplayText(requestId, payload)
             is CapturePhotoCommand -> dispatchCapturePhoto(requestId, payload)
-            else -> sendCommandError(
-                requestId = requestId,
-                action = CommandAction.DISPLAY_TEXT,
-                code = LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL,
-                message = "unsupported command payload ${payload.javaClass.simpleName}",
-                retryable = false,
-            )
+            else -> {
+                try {
+                    sendCommandError(
+                        requestId = requestId,
+                        action = CommandAction.DISPLAY_TEXT,
+                        code = LocalProtocolErrorCodes.UNSUPPORTED_PROTOCOL,
+                        message = "unsupported command payload ${payload.javaClass.simpleName}",
+                        retryable = false,
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    Timber.tag("command-dispatch").e(
+                        error,
+                        "failed to reject unsupported command payload for requestId=$requestId",
+                    )
+                }
+            }
         }
     }
 
@@ -75,6 +87,8 @@ class CommandDispatcher(
                 sendDisplayingStatus(requestId)
                 val result = displayTextExecutor.execute(command)
                 sendDisplayTextResult(requestId, result)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: DisplayTextExecutionException) {
                 Timber.tag("command-dispatch").e(error, "display_text command failed for requestId=$requestId")
                 sendCommandError(
@@ -83,6 +97,16 @@ class CommandDispatcher(
                     code = error.code,
                     message = error.message,
                     retryable = false,
+                )
+            } catch (error: Throwable) {
+                reportUnexpectedDispatchFailure(
+                    requestId = requestId,
+                    action = command.action,
+                    code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
+                    message = error.message ?: "display_text command dispatch failed",
+                    failureContext = "display_text command failed for requestId=$requestId",
+                    sendErrorContext = "failed to emit display_text command error for requestId=$requestId",
+                    error = error,
                 )
             } finally {
                 exclusiveGuard.release(requestId)
@@ -100,6 +124,18 @@ class CommandDispatcher(
         activeCommandJob = scope.launch {
             try {
                 capturePhotoExecutor.execute(requestId = requestId, command = command)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                reportUnexpectedDispatchFailure(
+                    requestId = requestId,
+                    action = command.action,
+                    code = LocalProtocolErrorCodes.BLUETOOTH_SEND_FAILED,
+                    message = error.message ?: "capture_photo command dispatch failed",
+                    failureContext = "capture_photo command failed for requestId=$requestId",
+                    sendErrorContext = "failed to emit capture_photo command error for requestId=$requestId",
+                    error = error,
+                )
             } finally {
                 exclusiveGuard.release(requestId)
                 activeCommandJob = null
@@ -196,5 +232,28 @@ class CommandDispatcher(
             ),
             null,
         )
+    }
+
+    private suspend fun reportUnexpectedDispatchFailure(
+        requestId: String,
+        action: CommandAction,
+        code: String,
+        message: String,
+        failureContext: String,
+        sendErrorContext: String,
+        error: Throwable,
+    ) {
+        Timber.tag("command-dispatch").e(error, failureContext)
+        runCatching {
+            sendCommandError(
+                requestId = requestId,
+                action = action,
+                code = code,
+                message = message,
+                retryable = true,
+            )
+        }.onFailure { sendError ->
+            Timber.tag("command-dispatch").e(sendError, sendErrorContext)
+        }
     }
 }

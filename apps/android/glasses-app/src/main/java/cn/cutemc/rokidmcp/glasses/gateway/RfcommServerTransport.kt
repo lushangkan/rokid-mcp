@@ -10,6 +10,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,55 +78,70 @@ class AndroidRfcommServerTransport(
             "bluetooth connect permission is not granted"
         }
 
-        val adapter = BluetoothAdapter.getDefaultAdapter()
-            ?: throw IllegalStateException("bluetooth adapter is unavailable")
+        try {
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+                ?: throw IllegalStateException("bluetooth adapter is unavailable")
 
-        closeSocketsSilently()
-        serverSocket = withContext(Dispatchers.IO) {
-            adapter.listenUsingRfcommWithServiceRecord(
-                LocalProtocolConstants.RFCOMM_SERVICE_NAME,
-                serviceUuid,
-            )
-        }
-        internalState.value = GlassesTransportState.LISTENING
-        internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.LISTENING))
+            closeSocketsSilently()
+            serverSocket = withContext(Dispatchers.IO) {
+                adapter.listenUsingRfcommWithServiceRecord(
+                    LocalProtocolConstants.RFCOMM_SERVICE_NAME,
+                    serviceUuid,
+                )
+            }
+            internalState.value = GlassesTransportState.LISTENING
+            internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.LISTENING))
 
-        acceptLoopJob?.cancel()
-        acceptLoopJob = transportScope.launch {
-            while (true) {
-                val listeningSocket = serverSocket ?: return@launch
-                try {
-                    val acceptedSocket = listeningSocket.accept()
-                    if (acceptedSocket.remoteDevice?.bondState != android.bluetooth.BluetoothDevice.BOND_BONDED) {
-                        closeResourceSilently("unbonded RFCOMM client socket") { acceptedSocket.close() }
-                        continue
-                    }
+            acceptLoopJob?.cancel()
+            acceptLoopJob = transportScope.launch {
+                while (true) {
+                    val listeningSocket = serverSocket ?: return@launch
+                    try {
+                        val acceptedSocket = listeningSocket.accept()
+                        if (acceptedSocket.remoteDevice?.bondState != android.bluetooth.BluetoothDevice.BOND_BONDED) {
+                            closeResourceSilently("unbonded RFCOMM client socket") { acceptedSocket.close() }
+                            continue
+                        }
 
-                    attachClient(acceptedSocket)
-                } catch (error: IOException) {
-                    if (serverSocket == null) {
+                        attachClient(acceptedSocket)
+                    } catch (error: IOException) {
+                        if (serverSocket == null) {
+                            return@launch
+                        }
+
+                        Timber.tag("rfcomm-server").e(error, "RFCOMM server accept loop failed")
+                        internalState.value = GlassesTransportState.ERROR
+                        internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.ERROR))
+                        internalEvents.emit(GlassesTransportEvent.Failure(IOException("rfcomm server accept failed", error)))
                         return@launch
                     }
-
-                    Timber.tag("rfcomm-server").e(error, "RFCOMM server accept loop failed")
-                    internalState.value = GlassesTransportState.ERROR
-                    internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.ERROR))
-                    internalEvents.emit(GlassesTransportEvent.Failure(IOException("rfcomm server accept failed", error)))
-                    return@launch
                 }
             }
+        } catch (error: Throwable) {
+            if (error is CancellationException) {
+                throw error
+            }
+
+            Timber.tag("rfcomm-server").e(error, "failed to start RFCOMM server transport")
+            closeSocketsSilently()
+            internalState.value = GlassesTransportState.ERROR
+            internalEvents.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.ERROR))
+            internalEvents.emit(GlassesTransportEvent.Failure(IOException("rfcomm server start failed", error)))
+            throw error
         }
     }
 
     override suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?) {
-        val currentClient = clientSocket ?: throw IllegalStateException("rfcomm server has no connected client")
-        val encoded = codec.encode(header, body)
         writeMutex.withLock {
             try {
+                val currentClient = clientSocket ?: throw IllegalStateException("rfcomm server has no connected client")
+                val encoded = codec.encode(header, body)
                 withContext(Dispatchers.IO) {
                     currentClient.outputStream.write(encoded)
                     currentClient.outputStream.flush()
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 Timber.tag("rfcomm-server").e(error, "failed to write RFCOMM frame to connected client")
                 internalState.value = GlassesTransportState.ERROR

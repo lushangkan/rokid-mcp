@@ -38,7 +38,16 @@ class GlassesLocalLinkSession(
             transport.events.collect { event ->
                 when (event) {
                     is GlassesTransportEvent.StateChanged -> controller.applyTransportState(event.state)
-                    is GlassesTransportEvent.FrameReceived -> handleFrame(event)
+                    is GlassesTransportEvent.FrameReceived -> {
+                        try {
+                            handleFrame(event)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            Timber.tag("glasses-session").e(error, "failed to handle incoming ${event.header.type} frame")
+                            controller.markFailure(error.message ?: "frame handling failed")
+                        }
+                    }
                     is GlassesTransportEvent.Failure -> {
                         Timber.tag("glasses-session").e(event.cause, "glasses transport failure")
                         controller.markFailure(event.cause.message ?: "transport failure")
@@ -54,6 +63,8 @@ class GlassesLocalLinkSession(
             eventJob = null
             throw error
         } catch (error: Throwable) {
+            Timber.tag("glasses-session").e(error, "failed to start glasses local link session")
+            controller.markFailure(error.message ?: "failed to start glasses link session")
             eventJob?.cancelAndJoin()
             eventJob = null
             throw error
@@ -96,22 +107,38 @@ class GlassesLocalLinkSession(
                 runtimeState = LocalRuntimeState.READY,
             ),
         )
-        transport.send(ack)
+        if (!sendSessionFrame(ack, "hello_ack")) {
+            return
+        }
         controller.markHelloAccepted()
     }
 
     private suspend fun handlePing(header: LocalFrameHeader<*>) {
         val ping = header.payload as? PingPayload ?: return
-        transport.send(
+        sendSessionFrame(
             LocalFrameHeader(
                 type = LocalMessageType.PONG,
                 timestamp = clock.nowMs(),
                 payload = PongPayload(seq = ping.seq, nonce = ping.nonce),
             ),
+            "pong",
         )
     }
 
     private suspend fun handleCommand(header: LocalFrameHeader<*>) {
         commandDispatcher.handleCommand(header)
+    }
+
+    private suspend fun sendSessionFrame(header: LocalFrameHeader<*>, frameName: String): Boolean {
+        return try {
+            transport.send(header)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Timber.tag("glasses-session").e(error, "failed to send $frameName frame")
+            controller.markFailure(error.message ?: "failed to send $frameName frame")
+            false
+        }
     }
 }

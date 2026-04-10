@@ -15,6 +15,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -99,5 +101,36 @@ class GlassesGatewayServiceTest {
         assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.CHUNK_START })
         assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.CHUNK_END })
         assertTrue(transport.sentFrames.last().header.type == LocalMessageType.COMMAND_RESULT)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `starting active composition rolls back controller and session when startup fails`() = runTest {
+        val app = GlassesApp()
+        val transport = FakeRfcommServerTransport().apply {
+            startFailure = IllegalStateException("rfcomm start failed")
+        }
+        val composition = createActiveGlassesGatewayComposition(
+            app = app,
+            sessionScope = backgroundScope,
+            transport = transport,
+            clock = FakeClock(1_717_200_200L),
+            cameraAdapter = object : CameraAdapter {
+                override suspend fun capture(quality: CapturePhotoQuality?) = CameraCapture(
+                    bytes = "jpeg-test".encodeToByteArray(),
+                    width = 640,
+                    height = 480,
+                )
+            },
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            kotlinx.coroutines.runBlocking { startActiveGlassesGatewayComposition(composition) }
+        }
+        runCurrent()
+
+        assertEquals(listOf("startup-failed"), transport.stopReasons)
+        assertEquals(GlassesRuntimeState.DISCONNECTED, app.runtimeStore.snapshot.value.runtimeState)
+        assertEquals(null, app.runtimeStore.snapshot.value.lastErrorMessage)
     }
 }
