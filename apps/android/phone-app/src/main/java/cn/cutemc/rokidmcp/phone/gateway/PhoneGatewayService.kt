@@ -11,12 +11,15 @@ import androidx.lifecycle.lifecycleScope
 import cn.cutemc.rokidmcp.phone.PhoneApp
 import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class PhoneGatewayService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Timber.tag("phone-service").i("service start command action=%s", intent?.action ?: "<null>")
         when (intent?.action) {
             ACTION_START -> lifecycleScope.launch {
                 if (!hasBluetoothConnectPermission()) {
+                    Timber.tag("phone-service").w("bluetooth connect permission denied; ignoring start request")
                     stopSelf(startId)
                     return@launch
                 }
@@ -24,6 +27,7 @@ class PhoneGatewayService : LifecycleService() {
                 val targetDeviceAddress = requireNotNull(intent.getStringExtra(EXTRA_TARGET_DEVICE_ADDRESS)) {
                     "phone gateway start intent requires targetDeviceAddress"
                 }
+                Timber.tag("phone-service").i("starting gateway for %s", redactBluetoothAddress(targetDeviceAddress))
                 val providedConfig = intent.toGatewayConfigOrNull()
                 val phoneApp = application as PhoneApp
                 providedConfig?.let { config ->
@@ -43,6 +47,7 @@ class PhoneGatewayService : LifecycleService() {
 
             ACTION_STOP -> lifecycleScope.launch {
                 val reason = intent.getStringExtra(EXTRA_STOP_REASON) ?: "service-stop"
+                Timber.tag("phone-service").i("service stop requested reason=%s", reason)
                 (application as PhoneApp).appController.stop(reason)
                 stopSelf(startId)
             }
@@ -56,6 +61,7 @@ class PhoneGatewayService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        Timber.tag("phone-service").i("service destroyed")
         lifecycleScope.launch {
             (application as PhoneApp).appController.stop("service-destroyed")
         }
@@ -132,3 +138,15 @@ private fun PhoneGatewayIntentConfig.toGatewayRuntimeConfig(appVersion: String):
     relayBaseUrl = relayBaseUrl,
     appVersion = appVersion,
 )
+
+private fun redactBluetoothAddress(address: String): String {
+    val octets = address.split(':')
+    if (octets.size < 2) {
+        return address
+    }
+
+    return buildList {
+        repeat(octets.size - 2) { add("**") }
+        addAll(octets.takeLast(2))
+    }.joinToString(":")
+}

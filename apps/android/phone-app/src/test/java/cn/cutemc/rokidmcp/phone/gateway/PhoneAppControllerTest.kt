@@ -1,8 +1,11 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import android.util.Log
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogLevel
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogTree
+import cn.cutemc.rokidmcp.phone.logging.assertLog
+import cn.cutemc.rokidmcp.phone.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
@@ -65,7 +68,9 @@ class PhoneAppControllerTest {
             },
         )
 
-        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        val logs = captureTimberLogs {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        }
 
         assertEquals(GatewayRunState.ERROR, controller.runState.value)
         assertEquals("PHONE_CONFIG_INCOMPLETE", runtimeStore.snapshot.value.lastErrorCode)
@@ -73,6 +78,8 @@ class PhoneAppControllerTest {
         assertEquals(1_717_171_800L, logStore.entries.value.single().timestampMs)
         assertEquals(PhoneLogLevel.ERROR, logStore.entries.value.single().level)
         assertEquals("controller", logStore.entries.value.single().tag)
+        logs.assertLog(Log.INFO, "controller", "start requested target=")
+        logs.assertLog(Log.ERROR, "controller", "missing relay config")
     }
 
     @Test
@@ -701,57 +708,61 @@ class PhoneAppControllerTest {
             controllerScope = backgroundScope,
         )
 
-        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
-        runCurrent()
-        relaySessionClient.onTextMessage(
-            """
-            {
-              "version":"1.0",
-              "type":"hello_ack",
-              "deviceId":"phone-device",
-              "timestamp":1717171901,
-              "payload":{
-                "sessionId":"ses_reporting",
-                "serverTime":1717171901,
-                "heartbeatIntervalMs":5000,
-                "heartbeatTimeoutMs":15000,
-                "limits":{
-                  "maxPendingCommands":1,
-                  "maxImageUploadSizeBytes":10485760,
-                  "acceptedImageContentTypes":["image/jpeg"]
+        val logs = captureTimberLogs {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+            runCurrent()
+            relaySessionClient.onTextMessage(
+                """
+                {
+                  "version":"1.0",
+                  "type":"hello_ack",
+                  "deviceId":"phone-device",
+                  "timestamp":1717171901,
+                  "payload":{
+                    "sessionId":"ses_reporting",
+                    "serverTime":1717171901,
+                    "heartbeatIntervalMs":5000,
+                    "heartbeatTimeoutMs":15000,
+                    "limits":{
+                      "maxPendingCommands":1,
+                      "maxImageUploadSizeBytes":10485760,
+                      "acceptedImageContentTypes":["image/jpeg"]
+                    }
+                  }
                 }
-              }
-            }
-            """.trimIndent(),
-        )
-        runCurrent()
+                """.trimIndent(),
+            )
+            runCurrent()
 
-        controller.applyTransportState(PhoneTransportState.CONNECTED)
-        runCurrent()
+            controller.applyTransportState(PhoneTransportState.CONNECTED)
+            runCurrent()
 
-        val stateUpdatesAfterConnected = webSocket.sentTexts.filter { it.contains("\"type\":\"phone_state_update\"") }
-        assertEquals(1, stateUpdatesAfterConnected.size)
-        assertTrue(stateUpdatesAfterConnected.last().contains("\"runtimeState\":\"${PhoneRuntimeState.CONNECTING.name}\""))
-        val baselineCount = stateUpdatesAfterConnected.size
+            val stateUpdatesAfterConnected = webSocket.sentTexts.filter { it.contains("\"type\":\"phone_state_update\"") }
+            assertEquals(1, stateUpdatesAfterConnected.size)
+            assertTrue(stateUpdatesAfterConnected.last().contains("\"runtimeState\":\"${PhoneRuntimeState.CONNECTING.name}\""))
+            val baselineCount = stateUpdatesAfterConnected.size
 
-        controller.handleLocalSessionEvent(PhoneLocalSessionEvent.PongReceived(seq = 1, receivedAt = 1_717_171_905L))
-        runCurrent()
-        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            controller.handleLocalSessionEvent(PhoneLocalSessionEvent.PongReceived(seq = 1, receivedAt = 1_717_171_905L))
+            runCurrent()
+            assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
 
-        runtimeStore.replace(runtimeStore.snapshot.value.copy(lastUpdatedAt = 123L))
-        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
-        runCurrent()
-        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            runtimeStore.replace(runtimeStore.snapshot.value.copy(lastUpdatedAt = 123L))
+            controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+            runCurrent()
+            assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
 
-        runtimeStore.replace(runtimeStore.snapshot.value.copy(uplinkState = PhoneUplinkState.ONLINE))
-        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
-        runCurrent()
-        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            runtimeStore.replace(runtimeStore.snapshot.value.copy(uplinkState = PhoneUplinkState.ONLINE))
+            controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+            runCurrent()
+            assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
 
-        runtimeStore.replace(runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_SAMPLE"))
-        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
-        runCurrent()
-        assertEquals(baselineCount + 1, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            runtimeStore.replace(runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_SAMPLE"))
+            controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+            runCurrent()
+            assertEquals(baselineCount + 1, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+        }
+
+        logs.assertLog(Log.DEBUG, "controller", "reporting snapshot setup=")
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

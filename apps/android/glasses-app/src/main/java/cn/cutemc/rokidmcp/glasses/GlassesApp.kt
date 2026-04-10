@@ -5,6 +5,7 @@ import cn.cutemc.rokidmcp.glasses.gateway.GlassesRuntimeStore
 import cn.cutemc.rokidmcp.glasses.logging.GlassesLoggerBootstrap
 import cn.cutemc.rokidmcp.glasses.renderer.DisplayStateStore
 import cn.cutemc.rokidmcp.glasses.logging.GlassesUiLogStore
+import timber.log.Timber
 
 class GlassesApp : Application() {
     val logStore = GlassesUiLogStore()
@@ -13,6 +14,7 @@ class GlassesApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Timber.tag("glasses-app").i("app startup")
         GlassesLoggerBootstrap.initialize(logStore)
     }
 }

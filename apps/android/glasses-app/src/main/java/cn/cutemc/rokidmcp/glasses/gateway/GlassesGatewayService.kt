@@ -27,9 +27,12 @@ class GlassesGatewayService : LifecycleService() {
     private var session: GlassesLocalLinkSession? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        Timber.tag("gateway-service").i("service start command action=%s", intent?.action ?: "none")
         when (intent?.action) {
             ACTION_START -> lifecycleScope.launch {
                 if (!hasBluetoothConnectPermission()) {
+                    Timber.tag("gateway-service").w("bluetooth connect permission denied")
                     stopSelf(startId)
                     return@launch
                 }
@@ -37,6 +40,10 @@ class GlassesGatewayService : LifecycleService() {
                 ensureStarted()
             }
             ACTION_STOP -> lifecycleScope.launch {
+                Timber.tag("gateway-service").i(
+                    "service stop command reason=%s",
+                    intent.getStringExtra(EXTRA_STOP_REASON) ?: "service-stop",
+                )
                 stopGateway(intent.getStringExtra(EXTRA_STOP_REASON) ?: "service-stop")
                 stopSelf(startId)
             }
@@ -50,6 +57,7 @@ class GlassesGatewayService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        Timber.tag("gateway-service").i("service destroyed")
         lifecycleScope.launch {
             stopGateway("service-destroyed")
         }
@@ -63,9 +71,11 @@ class GlassesGatewayService : LifecycleService() {
 
     private suspend fun ensureStarted() {
         if (session != null) {
+            Timber.tag("gateway-service").d("gateway composition already started")
             return
         }
 
+        Timber.tag("gateway-service").d("starting gateway composition")
         val composition = createActiveGlassesGatewayComposition(
             app = application as GlassesApp,
             sessionScope = lifecycleScope,
@@ -78,13 +88,16 @@ class GlassesGatewayService : LifecycleService() {
         startActiveGlassesGatewayComposition(composition)
         controller = composition.controller
         session = composition.session
+        Timber.tag("gateway-service").i("gateway composition ready")
     }
 
     private suspend fun stopGateway(reason: String) {
+        Timber.tag("gateway-service").d("stopping gateway composition reason=%s", reason)
         session?.stop(reason)
         session = null
         controller?.stop(reason)
         controller = null
+        Timber.tag("gateway-service").i("gateway composition stopped")
     }
 
     companion object {
@@ -155,8 +168,10 @@ internal fun createActiveGlassesGatewayComposition(
 
 internal suspend fun startActiveGlassesGatewayComposition(composition: ActiveGlassesGatewayComposition) {
     try {
+        Timber.tag("gateway-service").d("starting active glasses gateway composition")
         composition.controller.start()
         composition.session.start()
+        Timber.tag("gateway-service").i("active glasses gateway composition started")
     } catch (error: Throwable) {
         if (error !is CancellationException) {
             Timber.tag("gateway-service").e(error, "failed to start glasses gateway composition")

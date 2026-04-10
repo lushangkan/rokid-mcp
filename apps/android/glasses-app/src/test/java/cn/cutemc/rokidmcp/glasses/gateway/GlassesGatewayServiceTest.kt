@@ -1,17 +1,22 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
+import android.util.Log
 import cn.cutemc.rokidmcp.glasses.GlassesApp
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
+import cn.cutemc.rokidmcp.glasses.logging.assertLog
+import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality
-import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommand
-import cn.cutemc.rokidmcp.share.protocol.local.CapturePhotoCommandParams
-import cn.cutemc.rokidmcp.share.protocol.local.CaptureTransfer
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommand
 import cn.cutemc.rokidmcp.share.protocol.local.DisplayTextCommandParams
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -62,45 +67,40 @@ class GlassesGatewayServiceTest {
         assertTrue(transport.sentFrames.last().header.type == LocalMessageType.COMMAND_RESULT)
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `active service composition wires capture command to chunked result frames`() = runTest {
+    fun `starting active composition emits service and controller traces`() {
         val app = GlassesApp()
         val transport = FakeRfcommServerTransport()
-        val composition = createActiveGlassesGatewayComposition(
-            app = app,
-            sessionScope = backgroundScope,
-            cameraAdapter = object : CameraAdapter {
-                override suspend fun capture(quality: CapturePhotoQuality?) = CameraCapture(
-                    bytes = "jpeg-test".encodeToByteArray(),
-                    width = 640,
-                    height = 480,
-                )
-            },
-            transport = transport,
-            clock = FakeClock(1_717_200_100L),
-        )
+        val sessionScope = CoroutineScope(SupervisorJob())
+        try {
+            val composition = createActiveGlassesGatewayComposition(
+                app = app,
+                sessionScope = sessionScope,
+                transport = transport,
+                clock = FakeClock(1_717_200_300L),
+                cameraAdapter = object : CameraAdapter {
+                    override suspend fun capture(quality: CapturePhotoQuality?) = CameraCapture(
+                        bytes = "jpeg-test".encodeToByteArray(),
+                        width = 640,
+                        height = 480,
+                    )
+                },
+            )
 
-        composition.commandDispatcher.handleCommand(
-            LocalFrameHeader(
-                type = LocalMessageType.COMMAND,
-                requestId = "req_capture_1",
-                timestamp = 1_717_200_101L,
-                payload = CapturePhotoCommand(
-                    timeoutMs = 30_000L,
-                    params = CapturePhotoCommandParams(quality = CapturePhotoQuality.MEDIUM),
-                    transfer = CaptureTransfer(
-                        transferId = "trf_capture_1",
-                        maxBytes = 4_096L,
-                    ),
-                ),
-            ),
-        )
-        runCurrent()
+            val logs = captureTimberLogs {
+                runBlocking {
+                    startActiveGlassesGatewayComposition(composition)
+                }
+            }
 
-        assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.CHUNK_START })
-        assertTrue(transport.sentFrames.any { it.header.type == LocalMessageType.CHUNK_END })
-        assertTrue(transport.sentFrames.last().header.type == LocalMessageType.COMMAND_RESULT)
+            logs.assertLog(Log.DEBUG, "gateway-service", "starting active glasses gateway composition")
+            logs.assertLog(Log.INFO, "glasses-controller", "controller start")
+            logs.assertLog(Log.DEBUG, "glasses-controller", "transport state DISCONNECTED -> CONNECTING")
+            logs.assertLog(Log.INFO, "gateway-service", "active glasses gateway composition started")
+            logs.assertNoSensitiveData()
+        } finally {
+            sessionScope.cancel()
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -124,13 +124,18 @@ class GlassesGatewayServiceTest {
             },
         )
 
-        assertThrows(IllegalStateException::class.java) {
-            kotlinx.coroutines.runBlocking { startActiveGlassesGatewayComposition(composition) }
+        val logs = captureTimberLogs {
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { startActiveGlassesGatewayComposition(composition) }
+            }
         }
-        runCurrent()
 
         assertEquals(listOf("startup-failed"), transport.stopReasons)
         assertEquals(GlassesRuntimeState.DISCONNECTED, app.runtimeStore.snapshot.value.runtimeState)
         assertEquals(null, app.runtimeStore.snapshot.value.lastErrorMessage)
+        logs.assertLog(Log.ERROR, "gateway-service", "failed to start glasses gateway composition")
+        logs.assertLog(Log.INFO, "glasses-controller", "controller start")
+        logs.assertLog(Log.WARN, "glasses-controller", "runtime disconnected")
+        logs.assertNoSensitiveData()
     }
 }

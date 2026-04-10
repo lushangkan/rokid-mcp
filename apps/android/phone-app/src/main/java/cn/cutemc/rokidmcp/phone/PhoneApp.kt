@@ -8,6 +8,7 @@ import cn.cutemc.rokidmcp.phone.gateway.PhoneLogStore
 import cn.cutemc.rokidmcp.phone.gateway.PhoneRuntimeStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneLoggerBootstrap
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
+import timber.log.Timber
 
 class PhoneApp : Application() {
     val gatewayAppVersion: String = BuildConfig.VERSION_NAME
@@ -27,6 +28,7 @@ class PhoneApp : Application() {
     override fun onCreate() {
         super.onCreate()
         PhoneLoggerBootstrap.initialize(uiLogStore)
+        Timber.tag("phone-app").i("application startup version=%s", gatewayAppVersion)
     }
 }
 
