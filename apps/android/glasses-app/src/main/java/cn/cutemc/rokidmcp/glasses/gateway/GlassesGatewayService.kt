@@ -1,8 +1,12 @@
 package cn.cutemc.rokidmcp.glasses.gateway
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.lifecycle.LifecycleService
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import cn.cutemc.rokidmcp.glasses.GlassesApp
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
@@ -22,14 +26,25 @@ class GlassesGatewayService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> lifecycleScope.launch { ensureStarted() }
+            ACTION_START -> lifecycleScope.launch {
+                if (!hasBluetoothConnectPermission()) {
+                    stopSelf(startId)
+                    return@launch
+                }
+
+                ensureStarted()
+            }
             ACTION_STOP -> lifecycleScope.launch {
                 stopGateway(intent.getStringExtra(EXTRA_STOP_REASON) ?: "service-stop")
                 stopSelf(startId)
             }
         }
 
-        return START_STICKY
+        return if (intent?.action == ACTION_START && !hasBluetoothConnectPermission()) {
+            START_NOT_STICKY
+        } else {
+            START_STICKY
+        }
     }
 
     override fun onDestroy() {
@@ -37,6 +52,11 @@ class GlassesGatewayService : LifecycleService() {
             stopGateway("service-destroyed")
         }
         super.onDestroy()
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
     }
 
     private suspend fun ensureStarted() {
