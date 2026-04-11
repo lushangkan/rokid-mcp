@@ -2,6 +2,7 @@ package cn.cutemc.rokidmcp.phone.gateway
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
 import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfigStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -32,6 +33,7 @@ class PhoneGatewayConfigStateTest {
         assertNull(config.authToken)
         assertNull(config.relayBaseUrl)
         assertEquals("1.0", config.appVersion)
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
     }
 
     @Test
@@ -47,6 +49,7 @@ class PhoneGatewayConfigStateTest {
         assertEquals("phone-ab12cd34", saved.deviceId)
         assertEquals("token-123", saved.authToken)
         assertEquals("https://relay.example.com", saved.relayBaseUrl)
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, saved.reconnectDelayMs)
         assertEquals(saved, state.load())
     }
 
@@ -64,6 +67,7 @@ class PhoneGatewayConfigStateTest {
         assertEquals("phone-ab12cd34", loaded.deviceId)
         assertNull(loaded.authToken)
         assertNull(loaded.relayBaseUrl)
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, loaded.reconnectDelayMs)
     }
 
     @Test

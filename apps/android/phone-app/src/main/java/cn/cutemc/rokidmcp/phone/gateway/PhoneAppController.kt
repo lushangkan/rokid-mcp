@@ -1,5 +1,6 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
@@ -9,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -22,6 +24,7 @@ data class PhoneGatewayConfig(
     val authToken: String?,
     val relayBaseUrl: String?,
     val appVersion: String,
+    val reconnectDelayMs: Long = PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
 )
 
 enum class GatewayRunState {
@@ -76,9 +79,13 @@ class PhoneAppController(
     private var currentTransportState: PhoneTransportState = PhoneTransportState.IDLE
     private var isLocalSessionReady: Boolean = false
     private val reportMutex = Mutex()
+    private var lastStartTargetDeviceAddress: String? = null
+    private var lastEffectiveConfig: PhoneGatewayConfig? = null
+    private var pendingReconnectJob: Job? = null
 
     suspend fun start(targetDeviceAddress: String, preloadedConfig: PhoneGatewayConfig? = null) {
         Timber.tag("controller").i("start requested target=%s", maskBluetoothAddress(targetDeviceAddress))
+        cancelPendingReconnect()
         if (_runState.value != GatewayRunState.IDLE && localSession != null) {
             stopActiveSession("restarting controller session")
         }
@@ -105,6 +112,9 @@ class PhoneAppController(
             return
         }
 
+        setRunState(GatewayRunState.STARTING)
+        lastStartTargetDeviceAddress = targetDeviceAddress
+        lastEffectiveConfig = config
         setRunState(GatewayRunState.STARTING)
         lastReportedSnapshot = null
         currentTransportState = PhoneTransportState.CONNECTING
@@ -157,13 +167,13 @@ class PhoneAppController(
                             message = event.cause.message ?: "transport failure",
                         )
                         terminateActiveSession("transport ended")
-                        runtimeStore.replace(
-                            runtimeStore.snapshot.value.copy(
-                                runtimeState = PhoneRuntimeState.ERROR,
-                                lastErrorCode = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_ERROR,
-                                lastErrorMessage = event.cause.message ?: "transport failure",
-                            ),
+                        val next = runtimeStore.snapshot.value.copy(
+                            runtimeState = PhoneRuntimeState.ERROR,
+                            lastErrorCode = PhoneGatewayErrorCodes.BLUETOOTH_TRANSPORT_ERROR,
+                            lastErrorMessage = event.cause.message ?: "transport failure",
                         )
+                        runtimeStore.replace(next)
+                        scheduleFullReconnect("transport failure: ${event.cause.message}")
                     }
                     is PhoneTransportEvent.ConnectionClosed -> {
                         setRunState(GatewayRunState.STOPPED)
@@ -172,13 +182,13 @@ class PhoneAppController(
                             message = event.reason ?: "transport disconnected",
                         )
                         terminateActiveSession("transport ended")
-                        runtimeStore.replace(
-                            runtimeStore.snapshot.value.copy(
-                                runtimeState = PhoneRuntimeState.DISCONNECTED,
-                                lastErrorCode = null,
-                                lastErrorMessage = null,
-                            ),
+                        val next = runtimeStore.snapshot.value.copy(
+                            runtimeState = PhoneRuntimeState.DISCONNECTED,
+                            lastErrorCode = null,
+                            lastErrorMessage = null,
                         )
+                        runtimeStore.replace(next)
+                        scheduleFullReconnect("transport closed")
                     }
                     is PhoneTransportEvent.BytesReceived -> Unit
                 }
@@ -215,6 +225,7 @@ class PhoneAppController(
     suspend fun stop(reason: String) {
         Timber.tag("controller").i("stop requested reason=%s", reason)
         setRunState(GatewayRunState.STOPPING)
+        cancelPendingReconnect()
         stopActiveSession(reason)
         setRunState(GatewayRunState.STOPPED)
     }
@@ -288,12 +299,13 @@ class PhoneAppController(
                 relayCommandBridge?.failActiveCommand(event.code, event.message)
                 stopActiveSession("session failed")
                 val next = runtimeStore.snapshot.value.copy(
-                        runtimeState = PhoneRuntimeState.DISCONNECTED,
-                        lastErrorCode = event.code,
-                        lastErrorMessage = event.message,
+                    runtimeState = PhoneRuntimeState.DISCONNECTED,
+                    lastErrorCode = event.code,
+                    lastErrorMessage = event.message,
                 )
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
+                // Note: HelloRejected is non-retryable - user must resolve manually
             }
 
             is PhoneLocalSessionEvent.PongReceived -> {
@@ -311,12 +323,13 @@ class PhoneAppController(
                 relayCommandBridge?.failActiveCommand(event.code, event.message)
                 stopActiveSession("session failed")
                 val next = runtimeStore.snapshot.value.copy(
-                        runtimeState = PhoneRuntimeState.DISCONNECTED,
-                        lastErrorCode = event.code,
-                        lastErrorMessage = event.message,
+                    runtimeState = PhoneRuntimeState.DISCONNECTED,
+                    lastErrorCode = event.code,
+                    lastErrorMessage = event.message,
                 )
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
+                scheduleFullReconnect("session failed: ${event.code}")
             }
 
             is PhoneLocalSessionEvent.FrameReceived -> {
@@ -355,6 +368,17 @@ class PhoneAppController(
                 )
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
+                scheduleRelayReconnect("relay failed: ${event.message}")
+            }
+            is RelaySessionEvent.ConnectionClosed -> {
+                val current = runtimeStore.snapshot.value
+                val next = current.copy(
+                    uplinkState = PhoneUplinkState.OFFLINE,
+                    runtimeState = projectRuntimeState(PhoneUplinkState.OFFLINE, current.runtimeState),
+                )
+                runtimeStore.replace(next)
+                reportIfNeeded(next)
+                scheduleRelayReconnect("relay closed: ${event.code} ${event.reason}")
             }
         }
     }
@@ -388,6 +412,58 @@ class PhoneAppController(
         relayCommandBridge = null
         currentTransportState = PhoneTransportState.IDLE
         isLocalSessionReady = false
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        val target = lastStartTargetDeviceAddress ?: return
+        val config = lastEffectiveConfig ?: return
+        val delayMs = config.reconnectDelayMs
+
+        pendingReconnectJob?.cancel()
+
+        Timber.tag("controller").i("scheduling reconnect in ${delayMs}ms due to: $reason")
+
+        pendingReconnectJob = controllerScope.launch {
+            delay(delayMs)
+            Timber.tag("controller").i("executing scheduled reconnect")
+            start(target, config)
+        }
+    }
+
+    private fun scheduleRelayReconnect(reason: String) {
+        val config = lastEffectiveConfig ?: return
+        val delayMs = config.reconnectDelayMs
+
+        pendingReconnectJob?.cancel()
+
+        Timber.tag("controller").i("scheduling relay reconnect in ${delayMs}ms due to: $reason")
+
+        pendingReconnectJob = controllerScope.launch {
+            delay(delayMs)
+            Timber.tag("controller").i("executing scheduled relay reconnect")
+            relaySessionClient?.connect()
+        }
+    }
+
+    private fun scheduleFullReconnect(reason: String) {
+        val target = lastStartTargetDeviceAddress ?: return
+        val config = lastEffectiveConfig ?: return
+        val delayMs = config.reconnectDelayMs
+
+        pendingReconnectJob?.cancel()
+
+        Timber.tag("controller").i("scheduling full reconnect in ${delayMs}ms due to: $reason")
+
+        pendingReconnectJob = controllerScope.launch {
+            delay(delayMs)
+            Timber.tag("controller").i("executing scheduled full reconnect")
+            start(target, config)
+        }
+    }
+
+    private fun cancelPendingReconnect() {
+        pendingReconnectJob?.cancel()
+        pendingReconnectJob = null
     }
 
     private fun markStartupFailure(code: String, message: String) {

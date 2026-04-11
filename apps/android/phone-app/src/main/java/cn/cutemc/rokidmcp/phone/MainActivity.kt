@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
                     onDeviceIdChanged = viewModel::onDeviceIdChanged,
                     onAuthTokenChanged = viewModel::onAuthTokenChanged,
                     onRelayBaseUrlChanged = viewModel::onRelayBaseUrlChanged,
+                    onReconnectDelayMsChanged = viewModel::onReconnectDelayMsChanged,
                     onTargetDeviceAddressChanged = viewModel::onTargetDeviceAddressChanged,
                     onSave = viewModel::save,
                     onStart = {

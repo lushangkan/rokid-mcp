@@ -33,6 +33,14 @@ class PhoneLocalConfigStoreTest {
         assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
         assertNull(config.authToken)
         assertNull(config.relayBaseUrl)
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+    }
+
+    @Test
+    fun `default config uses default reconnect delay`() {
+        val config = PhoneLocalConfig.default()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
     }
 
     @Test
@@ -41,6 +49,7 @@ class PhoneLocalConfigStoreTest {
             deviceId = "phone-1234abcd",
             authToken = "token-abc",
             relayBaseUrl = "https://relay.example.com",
+            reconnectDelayMs = 12_345L,
         )
 
         store.save(expected)
@@ -74,6 +83,7 @@ class PhoneLocalConfigStoreTest {
         val config = store.load()
 
         assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
         val reloaded = store.load()
         assertEquals(config, reloaded)
     }
@@ -88,5 +98,28 @@ class PhoneLocalConfigStoreTest {
         val config = store.load()
 
         assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+    }
+
+    @Test
+    fun `load falls back to default reconnect delay when stored value is missing`() {
+        prefs.edit().putString("deviceId", "phone-ab12cd34").commit()
+
+        val config = store.load()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+    }
+
+    @Test
+    fun `load falls back to default reconnect delay when stored value is invalid`() {
+        prefs.edit()
+            .putString("deviceId", "phone-ab12cd34").commit()
+        prefs.edit()
+            .putString("reconnectDelayMs", "NaN")
+            .commit()
+
+        val config = store.load()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
     }
 }

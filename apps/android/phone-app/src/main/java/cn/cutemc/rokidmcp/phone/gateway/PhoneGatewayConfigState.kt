@@ -18,6 +18,7 @@ class PhoneGatewayConfigState(
             deviceId = deviceId,
             authToken = authToken?.ifBlank { null },
             relayBaseUrl = relayBaseUrl?.ifBlank { null },
+            reconnectDelayMs = localConfigStore.load().reconnectDelayMs,
         )
         localConfigStore.save(local)
         return local.toGatewayConfig()
@@ -37,6 +38,7 @@ class PhoneGatewayConfigState(
             authToken = authToken,
             relayBaseUrl = relayBaseUrl,
             appVersion = gatewayAppVersion,
+            reconnectDelayMs = reconnectDelayMs,
         )
     }
 }

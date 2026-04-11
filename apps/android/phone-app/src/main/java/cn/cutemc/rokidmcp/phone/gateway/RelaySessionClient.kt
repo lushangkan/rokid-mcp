@@ -64,6 +64,11 @@ sealed interface RelaySessionEvent {
     data class CommandCancelled(
         val message: CommandCancelMessage,
     ) : RelaySessionEvent
+
+    data class ConnectionClosed(
+        val code: Int,
+        val reason: String,
+    ) : RelaySessionEvent
 }
 
 interface RelayWebSocket {
@@ -337,7 +342,12 @@ class RelaySessionClient(
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
+        val wasActiveSocket = activeWebSocket != null
         activeWebSocket = webSocket
+
+        if (wasActiveSocket) {
+            internalEvents.emit(RelaySessionEvent.ConnectionClosed(code, reason))
+        }
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
     }
 
