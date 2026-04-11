@@ -2,6 +2,7 @@ import { PROTOCOL_NAME, PROTOCOL_VERSION } from "@rokid-mcp/protocol";
 import { Elysia } from "elysia";
 
 import { readRelayEnv, type RelayEnv } from "./config/env.ts";
+import { createRelayHttpAuthMiddleware } from "./lib/auth-middleware.ts";
 import { CommandService } from "./modules/command/command-service.ts";
 import { DeviceSessionManager } from "./modules/device/device-session-manager.ts";
 import { ImageService } from "./modules/image/image-service.ts";
@@ -41,12 +42,15 @@ export function createApp(options: CreateAppOptions) {
     commandService,
     heartbeatIntervalMs: env.heartbeatIntervalMs,
     heartbeatTimeoutMs: env.heartbeatTimeoutMs,
+    helloTimeoutMs: env.helloTimeoutMs,
+    wsAuthTokens: env.wsAuthTokens,
   });
 
   return new Elysia()
     .state("manager", manager)
     .state("imageService", imageService)
     .state("commandService", commandService)
+    .use(createRelayHttpAuthMiddleware({ httpAuthTokens: env.httpAuthTokens }))
     .use(createHttpDevicesRoutes({ manager }))
     .use(
       createHttpCommandsRoutes({
