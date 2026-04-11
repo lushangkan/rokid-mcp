@@ -132,14 +132,22 @@ async function sendRequest(options: {
   }, options.config.requestTimeoutMs);
 
   try {
+    const authorizationHeaders = {
+      Authorization: `Bearer ${options.config.relayHttpAuthToken}`,
+    };
+
     return await fetch(`${options.config.relayBaseUrl}${options.path}`, {
       method: options.method,
       headers: options.body
         ? {
+            ...authorizationHeaders,
             "content-type": "application/json",
             ...options.headers,
           }
-        : options.headers,
+        : {
+            ...authorizationHeaders,
+            ...options.headers,
+          },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
