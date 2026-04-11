@@ -15,6 +15,7 @@ import {
 import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
+import { logger, toLogError, type LogContext } from "../lib/logger.ts";
 import { CommandService, CommandServiceError } from "../modules/command/command-service.ts";
 import type { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
 
@@ -69,6 +70,24 @@ export type DeviceWsController = {
 
 function createSocketId() {
   return `sock_${crypto.randomUUID().replace(/-/g, "_")}`;
+}
+
+function createWsLogContext(
+  context: LogContext & {
+    deviceId?: string;
+  },
+): LogContext {
+  const { deviceId, ...rest } = context;
+
+  return {
+    ...(deviceId
+      ? {
+          phone_id: deviceId,
+          deviceId,
+        }
+      : {}),
+    ...rest,
+  };
 }
 
 function createHelloAckMessage(
@@ -137,8 +156,18 @@ function isCommandInboundMessage(inbound: RelayDeviceInboundMessage): inbound is
   );
 }
 
-function sendOutboundMessage(ws: DeviceSocketLike, message: RelayDeviceOutboundMessage): boolean {
+function sendOutboundMessage(
+  ws: DeviceSocketLike,
+  message: RelayDeviceOutboundMessage,
+  context: LogContext = {},
+): boolean {
+  const outboundMessageType = message.type;
+
   if (!Value.Check(RelayDeviceOutboundMessageSchema, message)) {
+    logger.error("relay outbound message failed validation", {
+      ...context,
+      messageType: outboundMessageType,
+    });
     ws.close(CLOSE_INTERNAL_ERROR);
     return false;
   }
@@ -146,7 +175,12 @@ function sendOutboundMessage(ws: DeviceSocketLike, message: RelayDeviceOutboundM
   try {
     ws.send(message);
     return true;
-  } catch {
+  } catch (error) {
+    logger.error("relay outbound message send failed", {
+      ...context,
+      messageType: outboundMessageType,
+      error: toLogError(error),
+    });
     ws.close(CLOSE_INTERNAL_ERROR);
     return false;
   }
@@ -197,16 +231,41 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
   function dispatchPendingCommand(requestId: string): boolean {
     const command = options.commandService.getCommand(requestId);
     if (!command || command.status !== "CREATED") {
+      logger.info("command dispatch skipped", {
+        requestId,
+        status: command?.status ?? null,
+        reason: command ? "command_not_created" : "command_not_found",
+      });
       return false;
     }
 
     const device = options.manager.getCurrentDeviceStatus(command.deviceId).device;
     if (device.sessionState !== "ONLINE" || !device.sessionId) {
+      logger.info(
+        "command dispatch skipped",
+        createWsLogContext({
+          deviceId: command.deviceId,
+          requestId,
+          status: command.status,
+          sessionState: device.sessionState,
+          reason: "device_not_online",
+        }),
+      );
       return false;
     }
 
     const socket = resolveDispatchSocket(command.deviceId, device.sessionId);
     if (!socket) {
+      logger.info(
+        "command dispatch skipped",
+        createWsLogContext({
+          deviceId: command.deviceId,
+          requestId,
+          sessionId: device.sessionId,
+          status: command.status,
+          reason: "socket_not_ready",
+        }),
+      );
       return false;
     }
 
@@ -215,12 +274,60 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
         requestId,
         sessionId: device.sessionId,
       });
-      return sendOutboundMessage(socket, dispatched.message);
+      const sent = sendOutboundMessage(
+        socket,
+        dispatched.message,
+        createWsLogContext({
+          deviceId: command.deviceId,
+          sessionId: device.sessionId,
+          socketId: socket.data.socketId,
+          requestId,
+          action: dispatched.command.action,
+        }),
+      );
+
+      if (sent) {
+        logger.info(
+          "command dispatch delivered to phone",
+          createWsLogContext({
+            deviceId: command.deviceId,
+            sessionId: device.sessionId,
+            socketId: socket.data.socketId,
+            requestId,
+            action: dispatched.command.action,
+            status: dispatched.command.status,
+          }),
+        );
+      }
+
+      return sent;
     } catch (error) {
       if (error instanceof CommandServiceError) {
+        logger.error(
+          "command dispatch failed",
+          createWsLogContext({
+            deviceId: command.deviceId,
+            sessionId: device.sessionId,
+            socketId: socket.data.socketId,
+            requestId,
+            code: error.code,
+            error: error.message,
+            retryable: error.retryable,
+          }),
+        );
         return false;
       }
 
+      logger.error(
+        "command dispatch failed",
+        createWsLogContext({
+          deviceId: command.deviceId,
+          sessionId: device.sessionId,
+          socketId: socket.data.socketId,
+          requestId,
+          error: toLogError(error),
+        }),
+      );
       socket.close(CLOSE_INTERNAL_ERROR);
       return false;
     }
@@ -252,6 +359,24 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           return;
       }
     } catch (error) {
+      logger.error(
+        "command inbound message handling failed",
+        createWsLogContext({
+          deviceId: ws.data.deviceId,
+          sessionId: ws.data.sessionId,
+          socketId: ws.data.socketId,
+          requestId: inbound.requestId,
+          messageType: inbound.type,
+          error:
+            error instanceof CommandServiceError
+              ? {
+                  code: error.code,
+                  message: error.message,
+                  retryable: error.retryable,
+                }
+              : toLogError(error),
+        }),
+      );
       ws.close(error instanceof CommandServiceError ? CLOSE_POLICY_VIOLATION : CLOSE_INTERNAL_ERROR);
     }
   }
@@ -259,6 +384,10 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
   const handlers = {
     open(ws: DeviceSocketLike) {
       ws.data.socketId ??= createSocketId();
+
+      logger.info("phone socket opened", {
+        socketId: ws.data.socketId,
+      });
     },
 
     message(ws: DeviceSocketLike, raw: string | Buffer) {
@@ -266,6 +395,10 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
 
       const parsed = parseInboundMessage(raw);
       if (!parsed.ok) {
+        logger.error("device websocket message rejected", {
+          socketId: ws.data.socketId,
+          closeCode: parsed.closeCode,
+        });
         ws.close(parsed.closeCode);
         return;
       }
@@ -273,6 +406,17 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
       const inbound = parsed.message;
 
       if (inbound.type === "hello") {
+        logger.info(
+          "phone hello received",
+          createWsLogContext({
+            deviceId: inbound.deviceId,
+            socketId: ws.data.socketId,
+            setupState: inbound.payload.setupState,
+            runtimeState: inbound.payload.runtimeState,
+            capabilities: [...inbound.payload.capabilities],
+          }),
+        );
+
         const sessionId = options.manager.registerHello({
           deviceId: inbound.deviceId,
           socketId: ws.data.socketId,
@@ -288,20 +432,52 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
         ws.data.sessionId = sessionId;
         ws.data.authToken = inbound.payload.authToken;
         if (!hasAuthenticatedSession(ws)) {
+          logger.error(
+            "phone hello authentication state invalid",
+            createWsLogContext({
+              deviceId: inbound.deviceId,
+              sessionId,
+              socketId: ws.data.socketId,
+            }),
+          );
           ws.close(CLOSE_INTERNAL_ERROR);
           return;
         }
 
         setActiveSocket(ws);
-        if (!sendOutboundMessage(ws, createHelloAckMessage(inbound.deviceId, sessionId, options))) {
+        if (!sendOutboundMessage(
+          ws,
+          createHelloAckMessage(inbound.deviceId, sessionId, options),
+          createWsLogContext({
+            deviceId: inbound.deviceId,
+            sessionId,
+            socketId: ws.data.socketId,
+          }),
+        )) {
           return;
         }
+
+        logger.info(
+          "phone hello acknowledged",
+          createWsLogContext({
+            deviceId: inbound.deviceId,
+            sessionId,
+            socketId: ws.data.socketId,
+            heartbeatIntervalMs: options.heartbeatIntervalMs,
+            heartbeatTimeoutMs: options.heartbeatTimeoutMs,
+          }),
+        );
 
         dispatchActiveCommand(inbound.deviceId);
         return;
       }
 
       if (!hasAuthenticatedSession(ws)) {
+        logger.error("device websocket message rejected before hello", {
+          socketId: ws.data.socketId,
+          messageType: inbound.type,
+          closeCode: CLOSE_POLICY_VIOLATION,
+        });
         ws.close(CLOSE_POLICY_VIOLATION);
         return;
       }
@@ -313,6 +489,18 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
         (inboundSessionId !== undefined && inboundSessionId !== ws.data.sessionId) ||
         !options.manager.matchesCurrentSession(ws.data.deviceId, ws.data.sessionId, ws.data.socketId)
       ) {
+        logger.error(
+          "device websocket message rejected due to session mismatch",
+          createWsLogContext({
+            deviceId: ws.data.deviceId,
+            sessionId: ws.data.sessionId,
+            socketId: ws.data.socketId,
+            messageType: inbound.type,
+            inboundDeviceId: inbound.deviceId,
+            inboundSessionId,
+            closeCode: CLOSE_POLICY_VIOLATION,
+          }),
+        );
         ws.close(CLOSE_POLICY_VIOLATION);
         return;
       }
@@ -351,6 +539,16 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
       }
 
       if (!isCommandInboundMessage(inbound)) {
+        logger.error(
+          "device websocket message rejected due to unsupported authenticated type",
+        createWsLogContext({
+          deviceId: ws.data.deviceId,
+          sessionId: ws.data.sessionId,
+          socketId: ws.data.socketId,
+          messageType: "unsupported_authenticated_message",
+          closeCode: CLOSE_POLICY_VIOLATION,
+        }),
+      );
         ws.close(CLOSE_POLICY_VIOLATION);
         return;
       }
@@ -360,11 +558,24 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
 
     close(ws: DeviceSocketLike) {
       if (!hasAuthenticatedSession(ws)) {
+        logger.info("phone socket closed before authentication", {
+          socketId: ws.data.socketId,
+        });
         return;
       }
 
       clearActiveSocket(ws);
-      options.manager.closeCurrentSession(ws.data.deviceId, ws.data.sessionId, ws.data.socketId);
+      const closed = options.manager.closeCurrentSession(ws.data.deviceId, ws.data.sessionId, ws.data.socketId);
+
+      logger.info(
+        "phone socket closed",
+        createWsLogContext({
+          deviceId: ws.data.deviceId,
+          sessionId: ws.data.sessionId,
+          socketId: ws.data.socketId,
+          closedCurrentSession: closed,
+        }),
+      );
     },
   };
 
