@@ -36,6 +36,7 @@ class PhoneGatewayService : LifecycleService() {
                             deviceId = config.deviceId,
                             authToken = config.authToken,
                             relayBaseUrl = config.relayBaseUrl,
+                            reconnectDelayMs = config.reconnectDelayMs,
                         ),
                     )
                 }
@@ -79,6 +80,7 @@ class PhoneGatewayService : LifecycleService() {
         const val EXTRA_DEVICE_ID = "deviceId"
         const val EXTRA_AUTH_TOKEN = "authToken"
         const val EXTRA_RELAY_BASE_URL = "relayBaseUrl"
+        const val EXTRA_RECONNECT_DELAY_MS = "reconnectDelayMs"
         const val EXTRA_TARGET_DEVICE_ADDRESS = "targetDeviceAddress"
         const val EXTRA_STOP_REASON = "stopReason"
 
@@ -93,6 +95,10 @@ class PhoneGatewayService : LifecycleService() {
                 config?.deviceId?.let { putExtra(EXTRA_DEVICE_ID, it) }
                 config?.authToken?.let { putExtra(EXTRA_AUTH_TOKEN, it) }
                 config?.relayBaseUrl?.let { putExtra(EXTRA_RELAY_BASE_URL, it) }
+                putExtra(
+                    EXTRA_RECONNECT_DELAY_MS,
+                    config?.reconnectDelayMs ?: PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
+                )
             }
 
         fun createStopIntent(context: Context, reason: String = "service-stop"): Intent =
@@ -106,6 +112,7 @@ data class PhoneGatewayIntentConfig(
     val deviceId: String,
     val authToken: String,
     val relayBaseUrl: String,
+    val reconnectDelayMs: Long = PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
 )
 
 internal fun Intent.toGatewayConfigOrNull(): PhoneGatewayIntentConfig? {
@@ -113,6 +120,10 @@ internal fun Intent.toGatewayConfigOrNull(): PhoneGatewayIntentConfig? {
         deviceId = getStringExtra(PhoneGatewayService.EXTRA_DEVICE_ID),
         authToken = getStringExtra(PhoneGatewayService.EXTRA_AUTH_TOKEN),
         relayBaseUrl = getStringExtra(PhoneGatewayService.EXTRA_RELAY_BASE_URL),
+        reconnectDelayMs = getLongExtra(
+            PhoneGatewayService.EXTRA_RECONNECT_DELAY_MS,
+            PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
+        ),
     )
 }
 
@@ -120,6 +131,7 @@ internal fun gatewayConfigFromExtras(
     deviceId: String?,
     authToken: String?,
     relayBaseUrl: String?,
+    reconnectDelayMs: Long? = null,
 ): PhoneGatewayIntentConfig? {
     if (deviceId.isNullOrBlank() || authToken.isNullOrBlank() || relayBaseUrl.isNullOrBlank()) {
         return null
@@ -129,6 +141,8 @@ internal fun gatewayConfigFromExtras(
         deviceId = deviceId,
         authToken = authToken,
         relayBaseUrl = relayBaseUrl,
+        reconnectDelayMs = reconnectDelayMs?.takeIf(PhoneLocalConfig::isValidReconnectDelayMs)
+            ?: PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
     )
 }
 
@@ -137,6 +151,7 @@ private fun PhoneGatewayIntentConfig.toGatewayRuntimeConfig(appVersion: String):
     authToken = authToken,
     relayBaseUrl = relayBaseUrl,
     appVersion = appVersion,
+    reconnectDelayMs = reconnectDelayMs,
 )
 
 private fun redactBluetoothAddress(address: String): String {
