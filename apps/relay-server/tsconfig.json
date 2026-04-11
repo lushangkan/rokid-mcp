@@ -4,6 +4,7 @@
     "composite": true,
     "rootDir": "src",
     "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true
   },
