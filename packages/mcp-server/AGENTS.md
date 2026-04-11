@@ -1,7 +1,7 @@
 # MCP SERVER PACKAGE GUIDE
 
 ## OVERVIEW
-`packages/mcp-server` is a library package that wraps relay APIs as MCP tools; it is not the relay runtime itself.
+`packages/mcp-server` is an internal-only, CLI-first MCP package whose primary entrypoint is the `rokid-mcp-server` bin command. It also exposes a small programmatic API from the root exports, keeps diagnostics on stderr only for stdio protocol compliance, and remains `private: true` for this cycle instead of being published to npm.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
