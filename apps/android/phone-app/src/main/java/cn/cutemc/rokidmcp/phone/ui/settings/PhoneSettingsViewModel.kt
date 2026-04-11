@@ -24,11 +24,20 @@ data class PhoneSettingsUiState(
     val deviceId: String = "",
     val authToken: String = "",
     val relayBaseUrl: String = "",
+    val reconnectDelayMs: String = "5000",
     val targetDeviceAddress: String = "00:11:22:33:44:55",
     val canSave: Boolean = false,
     val canStart: Boolean = false,
     val saveMessage: String? = null,
 )
+
+internal fun isValidReconnectDelayMs(value: String): Boolean {
+    return parseReconnectDelayMs(value) != null
+}
+
+private fun parseReconnectDelayMs(value: String): Long? {
+    return value.toLongOrNull()?.takeIf { it > 0L }
+}
 
 class PhoneSettingsViewModel(
     private val controller: PhoneAppController,
@@ -54,12 +63,14 @@ class PhoneSettingsViewModel(
                 deviceId = config.deviceId,
                 authToken = config.authToken.orEmpty(),
                 relayBaseUrl = config.relayBaseUrl.orEmpty(),
+                reconnectDelayMs = config.reconnectDelayMs.toString(),
                 targetDeviceAddress = _uiState.value.targetDeviceAddress,
-                canSave = PhoneLocalConfig.isValidDeviceId(config.deviceId),
+                canSave = PhoneLocalConfig.isValidDeviceId(config.deviceId) && isValidReconnectDelayMs(config.reconnectDelayMs.toString()),
                 canStart = isStartEligible(
                     deviceId = config.deviceId,
                     authToken = config.authToken.orEmpty(),
                     relayBaseUrl = config.relayBaseUrl.orEmpty(),
+                    reconnectDelayMs = config.reconnectDelayMs.toString(),
                     runState = runState.value,
                 ),
             )
@@ -75,11 +86,12 @@ class PhoneSettingsViewModel(
     fun onDeviceIdChanged(value: String) {
         _uiState.value = _uiState.value.copy(
             deviceId = value,
-            canSave = PhoneLocalConfig.isValidDeviceId(value),
+            canSave = PhoneLocalConfig.isValidDeviceId(value) && isValidReconnectDelayMs(_uiState.value.reconnectDelayMs),
             canStart = isStartEligible(
                 deviceId = value,
                 authToken = _uiState.value.authToken,
                 relayBaseUrl = _uiState.value.relayBaseUrl,
+                reconnectDelayMs = _uiState.value.reconnectDelayMs,
                 runState = runState.value,
             ),
             saveMessage = null,
@@ -93,6 +105,7 @@ class PhoneSettingsViewModel(
                 deviceId = _uiState.value.deviceId,
                 authToken = value,
                 relayBaseUrl = _uiState.value.relayBaseUrl,
+                reconnectDelayMs = _uiState.value.reconnectDelayMs,
                 runState = runState.value,
             ),
             saveMessage = null,
@@ -106,6 +119,22 @@ class PhoneSettingsViewModel(
                 deviceId = _uiState.value.deviceId,
                 authToken = _uiState.value.authToken,
                 relayBaseUrl = value,
+                reconnectDelayMs = _uiState.value.reconnectDelayMs,
+                runState = runState.value,
+            ),
+            saveMessage = null,
+        )
+    }
+
+    fun onReconnectDelayMsChanged(value: String) {
+        _uiState.value = _uiState.value.copy(
+            reconnectDelayMs = value,
+            canSave = PhoneLocalConfig.isValidDeviceId(_uiState.value.deviceId) && isValidReconnectDelayMs(value),
+            canStart = isStartEligible(
+                deviceId = _uiState.value.deviceId,
+                authToken = _uiState.value.authToken,
+                relayBaseUrl = _uiState.value.relayBaseUrl,
+                reconnectDelayMs = value,
                 runState = runState.value,
             ),
             saveMessage = null,
@@ -179,6 +208,7 @@ class PhoneSettingsViewModel(
                 deviceId = _uiState.value.deviceId,
                 authToken = _uiState.value.authToken,
                 relayBaseUrl = _uiState.value.relayBaseUrl,
+                reconnectDelayMs = _uiState.value.reconnectDelayMs,
                 runState = runState.value,
             ),
         )
@@ -188,15 +218,17 @@ class PhoneSettingsViewModel(
         deviceId: String,
         authToken: String,
         relayBaseUrl: String,
+        reconnectDelayMs: String,
         runState: GatewayRunState,
     ): Boolean {
         val hasRequiredConfig = PhoneLocalConfig.isValidDeviceId(deviceId) &&
             authToken.isNotBlank() &&
             relayBaseUrl.isNotBlank()
+        val hasValidDelay = parseReconnectDelayMs(reconnectDelayMs) != null
         val runStateAllowsStart = runState == GatewayRunState.IDLE ||
             runState == GatewayRunState.STOPPED ||
             runState == GatewayRunState.ERROR
-        return hasRequiredConfig && runStateAllowsStart
+        return hasRequiredConfig && hasValidDelay && runStateAllowsStart
     }
 
     private fun persistCurrentConfig(state: PhoneSettingsUiState) {
@@ -205,6 +237,8 @@ class PhoneSettingsViewModel(
                 deviceId = state.deviceId,
                 authToken = state.authToken.ifBlank { null },
                 relayBaseUrl = state.relayBaseUrl.ifBlank { null },
+                reconnectDelayMs = parseReconnectDelayMs(state.reconnectDelayMs)
+                    ?: PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
             ),
         )
     }
@@ -215,6 +249,8 @@ class PhoneSettingsViewModel(
             authToken = state.authToken.ifBlank { null },
             relayBaseUrl = state.relayBaseUrl.ifBlank { null },
             appVersion = appVersion,
+            reconnectDelayMs = parseReconnectDelayMs(state.reconnectDelayMs)
+                ?: PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS,
         )
     }
 }

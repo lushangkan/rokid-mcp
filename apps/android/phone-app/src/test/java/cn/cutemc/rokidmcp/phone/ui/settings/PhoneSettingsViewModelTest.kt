@@ -62,6 +62,7 @@ class PhoneSettingsViewModelTest {
         assertTrue(viewModel.uiState.value.deviceId.startsWith("phone-"))
         assertTrue(viewModel.uiState.value.canSave)
         assertFalse(viewModel.uiState.value.canStart)
+        assertEquals("5000", viewModel.uiState.value.reconnectDelayMs)
     }
 
     @Test
@@ -128,6 +129,7 @@ class PhoneSettingsViewModelTest {
         viewModel.onDeviceIdChanged("phone-ab12cd34")
         viewModel.onAuthTokenChanged("token-123")
         viewModel.onRelayBaseUrlChanged("https://relay.example.com")
+        viewModel.onReconnectDelayMsChanged("12000")
         assertTrue(viewModel.save())
         scope.testScheduler.runCurrent()
 
@@ -135,6 +137,82 @@ class PhoneSettingsViewModelTest {
         assertEquals("phone-ab12cd34", loaded.deviceId)
         assertEquals("token-123", loaded.authToken)
         assertEquals("https://relay.example.com", loaded.relayBaseUrl)
+        assertEquals(12_000L, loaded.reconnectDelayMs)
+    }
+
+    @Test
+    fun `reconnect delay validation requires a positive number`() = runTest {
+        val configStore = makeConfigStore("reconnect_delay_validation")
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+        scope.testScheduler.runCurrent()
+
+        viewModel.onReconnectDelayMsChanged("2500")
+
+        assertEquals("2500", viewModel.uiState.value.reconnectDelayMs)
+        assertTrue(viewModel.uiState.value.canSave)
+    }
+
+    @Test
+    fun `invalid reconnect delay disables start`() = runTest {
+        val configStore = makeConfigStore("invalid_reconnect_delay")
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+        scope.testScheduler.runCurrent()
+
+        viewModel.onDeviceIdChanged("phone-ab12cd34")
+        viewModel.onAuthTokenChanged("token-123")
+        viewModel.onRelayBaseUrlChanged("https://relay.example.com")
+        viewModel.onReconnectDelayMsChanged("0")
+        scope.testScheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.canSave)
+        assertFalse(viewModel.uiState.value.canStart)
+
+        viewModel.onReconnectDelayMsChanged("abc")
+        scope.testScheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.canStart)
     }
 
     @Test

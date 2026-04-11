@@ -34,6 +34,7 @@ fun PhoneSettingsScreen(
     onDeviceIdChanged: (String) -> Unit,
     onAuthTokenChanged: (String) -> Unit,
     onRelayBaseUrlChanged: (String) -> Unit,
+    onReconnectDelayMsChanged: (String) -> Unit,
     onTargetDeviceAddressChanged: (String) -> Unit,
     onSave: () -> Unit,
     onStart: () -> Unit,
@@ -77,6 +78,15 @@ fun PhoneSettingsScreen(
                     onValueChange = onRelayBaseUrlChanged,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Relay Base URL") },
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.reconnectDelayMs,
+                    onValueChange = onReconnectDelayMsChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Reconnect Delay (ms)") },
+                    isError = !isValidReconnectDelayMs(state.reconnectDelayMs),
                 )
             }
             item {
