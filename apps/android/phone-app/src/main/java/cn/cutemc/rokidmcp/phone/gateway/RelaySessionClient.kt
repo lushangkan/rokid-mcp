@@ -212,7 +212,7 @@ class RelaySessionClient(
         sessionId = null
         markConnectionClosedByClient()
         activeWebSocket?.close(reason = reason)
-        activeWebSocket = webSocket
+        activeWebSocket = null
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
     }
 
