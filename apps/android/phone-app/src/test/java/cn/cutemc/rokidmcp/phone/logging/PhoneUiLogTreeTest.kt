@@ -22,6 +22,7 @@ class PhoneUiLogTreeTest {
         assertEquals(
             listOf(
                 PhoneLogEntry(
+                    id = 1L,
                     level = PhoneLogLevel.DEBUG,
                     tag = "gateway",
                     message = "hello",
