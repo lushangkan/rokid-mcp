@@ -16,6 +16,7 @@ import {
 } from "@rokid-mcp/protocol";
 
 import { createCommandConfig, type CommandConfig } from "../../config/command-config.ts";
+import { logger, type LogContext } from "../../lib/logger.ts";
 import { CommandStore, type StoredCommand } from "./command-store.ts";
 import {
   DefaultCommandIdGenerator,
@@ -126,6 +127,23 @@ function cloneSubmissionRequest(request: SubmitCommandRequest): SubmitCommandReq
   return structuredClone(request);
 }
 
+function createCommandLogContext(
+  storedCommand: Pick<StoredCommand, "command" | "sessionId">,
+  context: LogContext = {},
+): LogContext {
+  return {
+    phone_id: storedCommand.command.deviceId,
+    deviceId: storedCommand.command.deviceId,
+    requestId: storedCommand.command.requestId,
+    sessionId: storedCommand.sessionId,
+    action: storedCommand.command.action,
+    status: storedCommand.command.status,
+    imageId: storedCommand.command.image?.imageId ?? null,
+    transferId: storedCommand.command.image?.transferId ?? null,
+    ...context,
+  };
+}
+
 export class CommandService {
   private readonly config: CommandConfig;
   private readonly clock: Clock;
@@ -190,8 +208,17 @@ export class CommandService {
       dispatchImage,
     };
 
+    const saved = this.store.save(storedCommand);
+
+    logger.info(
+      "command created",
+      createCommandLogContext(saved, {
+        createdAt,
+      }),
+    );
+
     return {
-      command: this.store.save(storedCommand).command,
+      command: saved.command,
     };
   }
 
@@ -223,6 +250,14 @@ export class CommandService {
       (entry) => {
         this.applyTimeout(entry);
       },
+    );
+
+    logger.info(
+      "command dispatched to phone",
+      createCommandLogContext(updated, {
+        dispatchedSessionId: sessionId,
+        dispatchedAt: timestamp,
+      }),
     );
 
     return {
@@ -257,6 +292,14 @@ export class CommandService {
       },
     );
 
+    logger.info(
+      "command acknowledged by phone",
+      createCommandLogContext(acknowledged, {
+        acknowledgedAt: message.payload.acknowledgedAt,
+        runtimeState: message.payload.runtimeState,
+      }),
+    );
+
     return acknowledged.command;
   }
 
@@ -283,6 +326,14 @@ export class CommandService {
         ),
       },
     }));
+
+    logger.info(
+      "command status updated",
+      createCommandLogContext(updated, {
+        executionStatus: message.payload.status,
+        statusAt: message.payload.statusAt,
+      }),
+    );
 
     return updated.command;
   }
@@ -316,6 +367,15 @@ export class CommandService {
     }));
 
     this.timeoutManager.cancel(message.requestId);
+
+    logger.info(
+      "command completed",
+      createCommandLogContext(updated, {
+        completedAt: message.payload.completedAt,
+        resultAction: message.payload.result.action,
+      }),
+    );
+
     return updated.command;
   }
 
@@ -343,6 +403,17 @@ export class CommandService {
 
     this.failOwnedImage(current.command.image, current.command.requestId, current.command.deviceId);
     this.timeoutManager.cancel(message.requestId);
+
+    logger.error(
+      "command failed",
+      createCommandLogContext(updated, {
+        failedAt: message.payload.failedAt,
+        errorCode: message.payload.error.code,
+        errorMessage: message.payload.error.message,
+        retryable: message.payload.error.retryable,
+      }),
+    );
+
     return updated.command;
   }
 
@@ -369,6 +440,17 @@ export class CommandService {
 
     this.failOwnedImage(current.command.image, current.command.requestId, current.command.deviceId);
     this.timeoutManager.cancel(requestId);
+
+    logger.info(
+      "command cancelled",
+      createCommandLogContext(updated, {
+        cancelledAt,
+        errorCode: reason?.code ?? null,
+        errorMessage: reason?.message ?? null,
+        retryable: reason?.retryable ?? null,
+      }),
+    );
+
     return updated.command;
   }
 
@@ -410,7 +492,7 @@ export class CommandService {
 
     const now = this.clock();
     this.failOwnedImage(current.command.image, current.command.requestId, current.command.deviceId);
-    this.updateCommand(entry.requestId, (storedCommand) => ({
+    const updated = this.updateCommand(entry.requestId, (storedCommand) => ({
       ...storedCommand,
       command: {
         ...storedCommand.command,
@@ -422,6 +504,15 @@ export class CommandService {
         image: this.failPendingImage(storedCommand.command.image),
       },
     }));
+
+    logger.error(
+      "command timed out",
+      createCommandLogContext(updated, {
+        phase: entry.phase,
+        timeoutMs: entry.timeoutMs,
+        completedAt: now,
+      }),
+    );
   }
 
   private requireCommand(requestId: string): StoredCommand {

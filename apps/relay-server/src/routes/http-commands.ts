@@ -15,6 +15,7 @@ import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
 import { RelayAppError } from "../lib/errors.ts";
+import { logger, toLogError, type LogContext } from "../lib/logger.ts";
 import { CommandService, CommandServiceError } from "../modules/command/command-service.ts";
 import type { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
 
@@ -37,14 +38,39 @@ type RouteFailure = {
 
 type RouteResult<T> = RouteSuccess<T> | RouteFailure;
 
+function createCommandRouteLogContext(
+  deviceId: string,
+  context: LogContext = {},
+): LogContext {
+  return {
+    phone_id: deviceId,
+    deviceId,
+    ...context,
+  };
+}
+
 export function createHttpCommandsRoutes(options: HttpCommandsRoutesOptions) {
   return new Elysia({ name: "http-commands-routes" })
     .post("/api/v1/commands", async ({ request, set }) => {
       const parsedBody = await parseProtocolJson<SubmitCommandRequest>(request, SubmitCommandRequestSchema);
       if (!parsedBody.ok) {
+        logger.error("command submission rejected", {
+          route: "POST /api/v1/commands",
+          status: parsedBody.status,
+          errorCode: parsedBody.body.error.code,
+          errorMessage: parsedBody.body.error.message,
+        });
         set.status = parsedBody.status;
         return parsedBody.body;
       }
+
+      logger.info(
+        "command submission received",
+        createCommandRouteLogContext(parsedBody.value.deviceId, {
+          route: "POST /api/v1/commands",
+          action: parsedBody.value.action,
+        }),
+      );
 
       try {
         const sessionId = resolveActiveSessionId(options.manager, parsedBody.value.deviceId);
@@ -52,13 +78,41 @@ export function createHttpCommandsRoutes(options: HttpCommandsRoutesOptions) {
           request: parsedBody.value,
           sessionId,
         });
-        options.dispatchPendingCommand?.(submitted.command.requestId);
+        const dispatchTriggered = options.dispatchPendingCommand?.(submitted.command.requestId) ?? false;
         const latestCommand = options.commandService.getCommand(submitted.command.requestId) ?? submitted.command;
+
+        logger.info(
+          "command submission accepted",
+          createCommandRouteLogContext(parsedBody.value.deviceId, {
+            route: "POST /api/v1/commands",
+            requestId: latestCommand.requestId,
+            sessionId,
+            action: latestCommand.action,
+            status: latestCommand.status,
+            dispatchTriggered,
+          }),
+        );
 
         const response = buildSubmitCommandResponse(latestCommand, request.url);
         set.status = 202;
         return response;
       } catch (error) {
+        logger.error(
+          "command submission failed",
+          createCommandRouteLogContext(parsedBody.value.deviceId, {
+            route: "POST /api/v1/commands",
+            action: parsedBody.value.action,
+            error:
+              error instanceof RelayAppError || error instanceof CommandServiceError
+                ? {
+                    code: error.code,
+                    message: error.message,
+                    retryable: error.retryable,
+                  }
+                : toLogError(error),
+          }),
+        );
+
         const failure = mapRouteError(error);
         set.status = failure.status;
         return failure.body;

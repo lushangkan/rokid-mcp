@@ -5,6 +5,7 @@ import type {
   SetupState,
 } from "@rokid-mcp/protocol";
 
+import { logger, type LogContext } from "../../lib/logger.ts";
 import {
   SingleDeviceRuntimeStore,
   type CurrentRuntimeSnapshot,
@@ -57,6 +58,17 @@ const DEFAULT_STATES = {
   runtimeState: "DISCONNECTED" as const,
 };
 
+function createPhoneLogContext(
+  deviceId: string,
+  context: LogContext = {},
+): LogContext {
+  return {
+    phone_id: deviceId,
+    deviceId,
+    ...context,
+  };
+}
+
 export class DeviceSessionManager {
   private readonly sessions = new SingleDeviceSessionStore();
   private readonly runtimes = new SingleDeviceRuntimeStore();
@@ -71,6 +83,7 @@ export class DeviceSessionManager {
 
   registerHello(input: RegisterHelloInput): string {
     const seenAt = Date.now();
+    const previous = this.sessions.get();
     const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "_")}`;
     const record: CurrentSessionRecord = {
       deviceId: input.deviceId,
@@ -97,16 +110,46 @@ export class DeviceSessionManager {
       lastSeenAt: seenAt,
     });
 
+    logger.info(
+      "phone session registered",
+      createPhoneLogContext(input.deviceId, {
+        sessionId,
+        socketId: input.socketId,
+        setupState: input.payload.setupState,
+        runtimeState: input.payload.runtimeState,
+        capabilities: [...input.payload.capabilities],
+        replacedPhoneId: previous?.deviceId ?? null,
+        replacedSessionId: previous?.sessionId ?? null,
+      }),
+    );
+
     return sessionId;
   }
 
   confirmHello(deviceId: string, sessionId: string, socketId?: string): boolean {
     const current = this.sessions.get();
     if (!current || current.deviceId !== deviceId || current.sessionId !== sessionId) {
+      logger.info(
+        "phone hello confirmation ignored",
+        createPhoneLogContext(deviceId, {
+          sessionId,
+          socketId: socketId ?? null,
+          reason: "session_not_current",
+        }),
+      );
       return false;
     }
 
     if (socketId && current.socketId !== socketId) {
+      logger.info(
+        "phone hello confirmation ignored",
+        createPhoneLogContext(deviceId, {
+          sessionId,
+          socketId,
+          expectedSocketId: current.socketId,
+          reason: "socket_mismatch",
+        }),
+      );
       return false;
     }
 
@@ -114,6 +157,16 @@ export class DeviceSessionManager {
       connected: true,
       sessionState: "ONLINE",
     });
+
+    logger.info(
+      "phone session confirmed",
+      createPhoneLogContext(deviceId, {
+        sessionId,
+        socketId: current.socketId,
+        sessionState: "ONLINE",
+      }),
+    );
+
     return true;
   }
 
@@ -152,6 +205,14 @@ export class DeviceSessionManager {
     const seenAt = Date.now();
     const current = this.sessions.get();
     if (!current || !this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
+      logger.info(
+        "phone heartbeat ignored",
+        createPhoneLogContext(input.deviceId, {
+          sessionId: input.sessionId,
+          socketId: input.socketId,
+          reason: "session_not_current",
+        }),
+      );
       return false;
     }
 
@@ -173,6 +234,18 @@ export class DeviceSessionManager {
       lastErrorMessage: null,
       lastSeenAt: seenAt,
     });
+
+    logger.info(
+      "phone heartbeat received",
+      createPhoneLogContext(input.deviceId, {
+        sessionId: input.sessionId,
+        socketId: input.socketId,
+        runtimeState: input.payload.runtimeState,
+        activeCommandRequestId: input.payload.activeCommandRequestId,
+        lastSeenAt: seenAt,
+      }),
+    );
+
     return true;
   }
 
@@ -180,6 +253,14 @@ export class DeviceSessionManager {
     const seenAt = Date.now();
     const current = this.sessions.get();
     if (!current || !this.matchesCurrentSession(input.deviceId, input.sessionId, input.socketId)) {
+      logger.info(
+        "phone state update ignored",
+        createPhoneLogContext(input.deviceId, {
+          sessionId: input.sessionId,
+          socketId: input.socketId,
+          reason: "session_not_current",
+        }),
+      );
       return false;
     }
 
@@ -202,12 +283,35 @@ export class DeviceSessionManager {
       lastErrorMessage: input.payload.lastErrorMessage ?? null,
       lastSeenAt: seenAt,
     });
+
+    logger.info(
+      "phone state updated",
+      createPhoneLogContext(input.deviceId, {
+        sessionId: input.sessionId,
+        socketId: input.socketId,
+        setupState: input.payload.setupState,
+        runtimeState: input.payload.runtimeState,
+        activeCommandRequestId: input.payload.activeCommandRequestId,
+        lastErrorCode: input.payload.lastErrorCode ?? null,
+        lastErrorMessage: input.payload.lastErrorMessage ?? null,
+        lastSeenAt: seenAt,
+      }),
+    );
+
     return true;
   }
 
   closeCurrentSession(deviceId: string, sessionId: string, socketId: string): boolean {
     const current = this.sessions.get();
     if (!current || !this.matchesCurrentSession(deviceId, sessionId, socketId)) {
+      logger.info(
+        "phone session close ignored",
+        createPhoneLogContext(deviceId, {
+          sessionId,
+          socketId,
+          reason: "session_not_current",
+        }),
+      );
       return false;
     }
 
@@ -220,6 +324,17 @@ export class DeviceSessionManager {
       lastErrorMessage: null,
     });
     this.runtimes.clear();
+
+    logger.info(
+      "phone session closed",
+      createPhoneLogContext(deviceId, {
+        sessionId,
+        socketId,
+        sessionState: "CLOSED",
+        runtimeState: "DISCONNECTED",
+      }),
+    );
+
     return true;
   }
 
@@ -307,6 +422,18 @@ export class DeviceSessionManager {
       lastErrorMessage: null,
       lastSeenAt: record.lastSeenAt,
     } satisfies CurrentRuntimeSnapshot);
+
+    logger.info(
+      "phone session marked stale",
+      createPhoneLogContext(record.deviceId, {
+        sessionId: record.sessionId,
+        socketId: record.socketId,
+        sessionState: "STALE",
+        runtimeState: "DISCONNECTED",
+        lastSeenAt: record.lastSeenAt,
+        heartbeatTimeoutMs: this.heartbeatTimeoutMs,
+      }),
+    );
   }
 
   private isStale(record: CurrentSessionRecord, now: number): boolean {
