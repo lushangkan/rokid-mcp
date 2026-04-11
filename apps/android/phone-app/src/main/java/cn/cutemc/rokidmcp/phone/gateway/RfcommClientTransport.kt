@@ -8,6 +8,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -119,12 +120,15 @@ internal class AndroidRfcommClientTransport(
     private val internalState = MutableStateFlow(PhoneTransportState.IDLE)
     private val internalEvents = MutableSharedFlow<PhoneTransportEvent>(extraBufferCapacity = 32)
     private val writeMutex = Mutex()
+    private val closeMutex = Mutex()
     private val serviceUuid = UUID.fromString(LocalProtocolConstants.RFCOMM_SERVICE_UUID)
 
     private var socket: RfcommClientSocket? = null
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
     private var readLoopJob: Job? = null
+    @Volatile
+    private var shutdownReason: String? = null
 
     override val state: StateFlow<PhoneTransportState> = internalState
     override val events: Flow<PhoneTransportEvent> = internalEvents
@@ -153,6 +157,7 @@ internal class AndroidRfcommClientTransport(
             withContext(ioDispatcher) {
                 createdSocket.connect()
             }
+            shutdownReason = null
             socket = createdSocket
             inputStream = createdSocket.inputStream
             outputStream = createdSocket.outputStream
@@ -209,10 +214,16 @@ internal class AndroidRfcommClientTransport(
                     Timber.tag(RFCOMM_CLIENT_TAG).v("read %d RFCOMM bytes", count)
                     internalEvents.emit(PhoneTransportEvent.BytesReceived(buffer.copyOf(count)))
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: IOException) {
-                handleReadFailure(error)
+                handleReadFailure(connectedSocket, maskedTargetAddress, error)
             } catch (error: Throwable) {
-                handleReadFailure(IOException("rfcomm client read loop failed", error))
+                handleReadFailure(
+                    connectedSocket,
+                    maskedTargetAddress,
+                    IOException("rfcomm client read loop failed", error),
+                )
             }
         }
     }
@@ -221,7 +232,27 @@ internal class AndroidRfcommClientTransport(
         closeSocket(reason, emitClosedEvent = true)
     }
 
-    private suspend fun handleReadFailure(error: IOException) {
+    private suspend fun handleReadFailure(
+        connectedSocket: RfcommClientSocket,
+        maskedTargetAddress: String,
+        error: IOException,
+    ) {
+        val expectedShutdown = closeMutex.withLock {
+            when {
+                socket !== connectedSocket -> shutdownReason ?: "socket already closed"
+                shutdownReason != null -> shutdownReason
+                else -> null
+            }
+        }
+        if (expectedShutdown != null) {
+            Timber.tag(RFCOMM_CLIENT_TAG).i(
+                "ignoring RFCOMM read failure after shutdown target=%s reason=%s",
+                maskedTargetAddress,
+                expectedShutdown,
+            )
+            return
+        }
+
         Timber.tag(RFCOMM_CLIENT_TAG).e(error, "RFCOMM client read loop failed")
         closeSocket(error.message ?: "rfcomm client read failure", emitClosedEvent = false)
         emitStateTransition(PhoneTransportState.ERROR, error)
@@ -230,10 +261,19 @@ internal class AndroidRfcommClientTransport(
 
     private suspend fun closeSocket(reason: String, emitClosedEvent: Boolean) {
         val currentJob = currentCoroutineContext()[Job]
-        val activeReadLoopJob = readLoopJob
-        readLoopJob = null
-        Timber.tag(RFCOMM_CLIENT_TAG).i("cleaning up RFCOMM resources reason=%s", reason)
-        closeSocketSilently(logCleanup = false)
+        val activeReadLoopJob = closeMutex.withLock {
+            val trackedReadLoop = readLoopJob
+            if (trackedReadLoop == null && inputStream == null && outputStream == null && socket == null) {
+                return
+            }
+
+            readLoopJob = null
+            shutdownReason = reason
+            Timber.tag(RFCOMM_CLIENT_TAG).i("cleaning up RFCOMM resources reason=%s", reason)
+            closeSocketSilently(logCleanup = false)
+            trackedReadLoop
+        }
+
         emitStateTransition(PhoneTransportState.DISCONNECTED)
         if (emitClosedEvent) {
             internalEvents.emit(PhoneTransportEvent.ConnectionClosed(reason))

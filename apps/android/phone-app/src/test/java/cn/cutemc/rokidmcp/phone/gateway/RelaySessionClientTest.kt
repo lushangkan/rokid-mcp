@@ -146,16 +146,122 @@ class RelaySessionClientTest {
             runCurrent()
             callbacks!!.onClosed(1000, "normal closure")
             runCurrent()
-            callbacks!!.onFailure(IllegalStateException("boom"))
-            runCurrent()
         }
 
         logs.assertLog(Log.INFO, "relay-session", "connecting relay websocket to wss://relay.example.com/base/ws/device")
         logs.assertLog(Log.INFO, "relay-session", "relay websocket opened")
         logs.assertLog(Log.WARN, "relay-session", "relay websocket closed code=1000 reason=normal closure")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { it.message.contains("relay-user") || it.message.contains("trace=hidden") })
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `connect logs relay websocket failures while connection is active`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var callbacks: RelayWebSocketCallbacks? = null
+        val client = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_000L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "token",
+                relayBaseUrl = "https://relay-user:relay-pass@relay.example.com/base?trace=hidden",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                FakeRelayWebSocket()
+            },
+        )
+
+        val logs = captureTimberLogsSuspend {
+            client.connect()
+            callbacks!!.onFailure(IllegalStateException("boom"))
+            runCurrent()
+        }
+
+        logs.assertLog(Log.INFO, "relay-session", "connecting relay websocket to wss://relay.example.com/base/ws/device")
         logs.assertLog(Log.ERROR, "relay-session", "relay websocket failure url=wss://relay.example.com/base/ws/device")
         logs.assertNoSensitiveData()
         assertFalse(logs.any { it.message.contains("relay-user") || it.message.contains("trace=hidden") })
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `duplicate websocket terminal callbacks are ignored after the first close`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var callbacks: RelayWebSocketCallbacks? = null
+        val client = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_000L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                FakeRelayWebSocket()
+            },
+        )
+
+        val logs = captureTimberLogsSuspend {
+            client.connect()
+            callbacks!!.onClosed(1003, "")
+            callbacks!!.onClosed(1003, "")
+            callbacks!!.onFailure(IllegalStateException("boom"))
+            runCurrent()
+        }
+
+        assertEquals(
+            1,
+            logs.count { entry ->
+                entry.tag == "relay-session" &&
+                    entry.message == "relay websocket closed code=1003 reason=(empty)"
+            },
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `manual disconnect ignores late websocket close callbacks`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var callbacks: RelayWebSocketCallbacks? = null
+        val client = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_000L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                FakeRelayWebSocket()
+            },
+        )
+
+        val logs = captureTimberLogsSuspend {
+            client.connect()
+            client.disconnect("manual")
+            callbacks!!.onClosed(1003, "")
+            callbacks!!.onFailure(IllegalStateException("boom"))
+            runCurrent()
+        }
+
+        assertEquals(
+            0,
+            logs.count { entry ->
+                entry.tag == "relay-session" &&
+                    entry.message == "relay websocket closed code=1003 reason=(empty)"
+            },
+        )
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
