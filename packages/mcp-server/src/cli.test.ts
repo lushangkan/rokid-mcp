@@ -50,6 +50,7 @@ describe("runStdioServerCli", () => {
   test("delegates validated env to the reusable stdio runtime", async () => {
     const env = {
       relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-http-token",
       requestTimeoutMs: 5_000,
       defaultDeviceId: "rokid_glasses_01",
       commandPollIntervalMs: 250,
@@ -106,6 +107,7 @@ describe("runStdioServerCli", () => {
         await runStdioServerCli({
           readEnv: () => ({
             relayBaseUrl: "https://relay.example.com",
+            relayHttpAuthToken: "relay-http-token",
             requestTimeoutMs: 5_000,
             defaultDeviceId: "rokid_glasses_01",
             commandPollIntervalMs: 250,

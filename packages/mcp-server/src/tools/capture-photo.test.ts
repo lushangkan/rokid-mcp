@@ -268,6 +268,28 @@ describe("image downloader", () => {
       });
     }
   });
+
+  test("image downloader passes through relay auth image access errors", async () => {
+    const downloader = createImageDownloader({
+      relayCommandClient: {
+        async downloadImage() {
+          throw new RelayRequestError("AUTH_FORBIDDEN_IMAGE_ACCESS", "Not allowed to download image", false);
+        },
+      },
+    });
+
+    await expect(
+      downloader.download({
+        imageId: "img_forbidden123",
+        expectedSize: 3,
+        expectedMimeType: "image/jpeg",
+      }),
+    ).rejects.toMatchObject({
+      code: "AUTH_FORBIDDEN_IMAGE_ACCESS",
+      message: "Not allowed to download image",
+      retryable: false,
+    });
+  });
 });
 
 describe("image parser", () => {

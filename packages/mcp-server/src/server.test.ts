@@ -7,6 +7,7 @@ describe("createMcpServer", () => {
     const server = createMcpServer({
       env: {
         relayBaseUrl: "http://localhost:3000",
+        relayHttpAuthToken: "relay-http-token",
         requestTimeoutMs: 5_000,
         defaultDeviceId: "rokid_glasses_01",
         commandTimeoutMs: 30_000,

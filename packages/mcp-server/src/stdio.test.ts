@@ -15,6 +15,7 @@ describe("startStdioServer", () => {
     await startStdioServer({
       env: {
         relayBaseUrl: "http://localhost:3000",
+        relayHttpAuthToken: "relay-http-token",
         requestTimeoutMs: 5_000,
         defaultDeviceId: "rokid_glasses_01",
         commandPollIntervalMs: 250,
@@ -41,6 +42,7 @@ describe("startStdioServer", () => {
         value: {
           env: {
             relayBaseUrl: "http://localhost:3000",
+            relayHttpAuthToken: "relay-http-token",
             requestTimeoutMs: 5_000,
             defaultDeviceId: "rokid_glasses_01",
             commandPollIntervalMs: 250,
