@@ -1,0 +1,9 @@
+- Task 2 wired `reconnectDelayMs` through `PhoneGatewayConfig`, `PhoneSettingsViewModel`, and `PhoneSettingsScreen` as a string-backed settings field that parses to a positive `Long` before save/start.
+- `PhoneSettingsViewModel` now keeps Save/Start disabled when reconnect delay is blank, non-numeric, or `<= 0`, while persisting valid values in milliseconds.
+- Task 3 added `PhoneAppController` reconnect foundation state (`lastStartTargetDeviceAddress`, `lastEffectiveConfig`, `pendingReconnectJob`) and central cancellation so fresh `start()` and manual `stop()` always clear any queued reconnect before proceeding.
+- `PhoneAppController.scheduleReconnect()` now reuses the cached effective config/target and waits with `delay(config.reconnectDelayMs)` instead of reloading config during the retry window.
+- Task 4 adds `RelaySessionEvent.ConnectionClosed` so the controller can distinguish unexpected relay websocket closure from manual disconnect and avoid scheduling reconnects on intentional stop.
+- `RelaySessionClient` now clears `activeWebSocket` before emitting close/failure events, allowing delayed relay-only reconnects to call `relaySessionClient?.connect()` without tearing down the healthy local Bluetooth session.
+- Task 5 adds delayed full-session reconnect scheduling for Bluetooth transport failures, transport closes, and retryable local session failures while preserving the cached target/config and the configured reconnect delay.
+- PhoneLocalSessionEvent.HelloRejected remains terminal: the controller still updates runtime state and reports the failure, but intentionally skips automatic reconnect scheduling so the user must resolve it manually.
+- Final audit confirmed the runtime reconnect paths use config.reconnectDelayMs (PhoneAppController.scheduleRelayReconnect / scheduleFullReconnect) rather than a hardcoded retry delay, and relay reconnect remains relay-only because handleRelaySessionEvent never tears down localSession.

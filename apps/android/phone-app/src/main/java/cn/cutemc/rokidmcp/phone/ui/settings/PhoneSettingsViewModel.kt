@@ -24,7 +24,7 @@ data class PhoneSettingsUiState(
     val deviceId: String = "",
     val authToken: String = "",
     val relayBaseUrl: String = "",
-    val reconnectDelayMs: String = "5000",
+    val reconnectDelayMs: String = PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS.toString(),
     val targetDeviceAddress: String = "00:11:22:33:44:55",
     val canSave: Boolean = false,
     val canStart: Boolean = false,

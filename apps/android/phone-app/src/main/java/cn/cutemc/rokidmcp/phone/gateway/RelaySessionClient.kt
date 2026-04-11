@@ -146,6 +146,7 @@ class RelaySessionClient(
     private var activeWebSocket: RelayWebSocket? = webSocket
     private var sessionId: String? = null
     private var heartbeatIntervalMs: Long = RelayProtocolConstants.DEFAULT_HEARTBEAT_INTERVAL_MS
+    private var isManualDisconnect: Boolean = false
     private var heartbeatJob: Job? = null
     private var heartbeatSeq: Long = 0L
     private var nextConnectionId: Long = 0L
@@ -153,6 +154,7 @@ class RelaySessionClient(
     private var handledTerminalConnectionId: Long? = null
 
     suspend fun connect() {
+        isManualDisconnect = false
         if (activeWebSocket == null) {
             val relayUrl = buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required"))
             val connectionId = registerConnection()
@@ -204,6 +206,7 @@ class RelaySessionClient(
     }
 
     suspend fun disconnect(reason: String) {
+        isManualDisconnect = true
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
@@ -345,7 +348,7 @@ class RelaySessionClient(
         val wasActiveSocket = activeWebSocket != null
         activeWebSocket = webSocket
 
-        if (wasActiveSocket) {
+        if (!isManualDisconnect && wasActiveSocket) {
             internalEvents.emit(RelaySessionEvent.ConnectionClosed(code, reason))
         }
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
