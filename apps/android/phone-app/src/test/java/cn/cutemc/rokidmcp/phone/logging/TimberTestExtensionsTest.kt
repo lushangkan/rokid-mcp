@@ -1,6 +1,8 @@
 package cn.cutemc.rokidmcp.phone.logging
 
 import android.util.Log
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -14,8 +16,9 @@ class TimberTestExtensionsTest {
         Timber.uprootAll()
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `captureTimberLogs records tagged entries and helpers assert them`() {
+    fun `captureTimberLogs records tagged entries and helpers assert them`() = runTest {
         val failure = IllegalStateException("boom")
 
         val logs = captureTimberLogs {
@@ -36,8 +39,9 @@ class TimberTestExtensionsTest {
         logs.assertNoSensitiveData()
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `captureTimberLogs supports clearing current tree state`() {
+    fun `captureTimberLogs supports clearing current tree state`() = runTest {
         val logs = captureTimberLogs { tree ->
             Timber.tag("phone-service").d("discard me")
             tree.clear()
@@ -48,8 +52,9 @@ class TimberTestExtensionsTest {
         assertEquals("keep me", logs.single().message)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `assertNoSensitiveData checks known secrets`() {
+    fun `assertNoSensitiveData checks known secrets`() = runTest {
         val logs = captureTimberLogs {
             Timber.tag("phone-app").w("relay url=https://example.com/upload sessionId=session-1")
         }

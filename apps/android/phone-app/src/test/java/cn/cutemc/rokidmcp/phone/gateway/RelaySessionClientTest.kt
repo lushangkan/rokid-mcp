@@ -160,6 +160,51 @@ class RelaySessionClientTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `incoming relay command logs avoid raw websocket payloads and command text`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val client = RelaySessionClient(
+            webSocket = FakeRelayWebSocket(),
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_050L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "authToken secret",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+        )
+
+        val logs = captureTimberLogsSuspend {
+            client.onTextMessage(
+                """
+                {
+                  "version":"1.0",
+                  "type":"command",
+                  "deviceId":"abc12345",
+                  "sessionId":"ses_sensitive",
+                  "requestId":"req_display_sensitive",
+                  "timestamp":1717172051,
+                  "payload":{
+                    "action":"display_text",
+                    "params":{
+                      "text":"Bearer Authorization authToken displayed text=do-not-log",
+                      "durationMs":3000
+                    }
+                  }
+                }
+                """.trimIndent(),
+            )
+            runCurrent()
+        }
+
+        logs.assertLog(Log.INFO, "relay-session", "received relay command requestId=req_display_sensitive action=DISPLAY_TEXT sessionId=ses_sensitive")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { it.message.contains("displayed text=do-not-log") })
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `heartbeat includes nullable active command field when absent`() = runTest {
         val webSocket = FakeRelayWebSocket()
         val runtimeStore = PhoneRuntimeStore()
