@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Elysia } from "elysia";
 
 import {
   CommandStatusResponseSchema,
@@ -7,6 +8,7 @@ import {
 } from "@rokid-mcp/protocol";
 import { Value } from "@sinclair/typebox/value";
 
+import { createRelayHttpAuthMiddleware } from "../lib/auth-middleware.ts";
 import { CommandService } from "../modules/command/command-service.ts";
 import { DefaultCommandIdGenerator } from "../modules/command/id-generator.ts";
 import { TimeoutManager, type TimeoutScheduler } from "../modules/command/timeout-manager.ts";
@@ -132,6 +134,51 @@ function createDisplayTextCommand(service: CommandService, sessionId: string) {
 }
 
 describe("http commands", () => {
+  test("rejects unauthorized command submission before business logic runs", async () => {
+    let statusCalls = 0;
+    let submitCalls = 0;
+    let dispatchCalls = 0;
+
+    const app = new Elysia()
+      .use(createRelayHttpAuthMiddleware({ httpAuthTokens: ["mcp-token-1"] }))
+      .use(
+        createHttpCommandsRoutes({
+          manager: {
+            getCurrentDeviceStatus() {
+              statusCalls += 1;
+              throw new Error("status lookup should not run");
+            },
+          } as unknown as DeviceSessionManager,
+          commandService: {
+            submitCommand() {
+              submitCalls += 1;
+              throw new Error("submit should not run");
+            },
+          } as unknown as CommandService,
+          dispatchPendingCommand() {
+            dispatchCalls += 1;
+            return false;
+          },
+        }),
+      );
+
+    const response = await app.handle(createSubmitRequest({
+      deviceId: "rokid-device",
+      action: "display_text",
+      payload: {
+        text: "Hello relay",
+        durationMs: 3_000,
+      },
+    }));
+    const json = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(json.error.code).toBe("AUTH_HTTP_BEARER_INVALID");
+    expect(statusCalls).toBe(0);
+    expect(submitCalls).toBe(0);
+    expect(dispatchCalls).toBe(0);
+  });
+
   test("submits a display_text command and returns a protocol response", async () => {
     const { app, manager, service } = createRoutes();
     registerOnlineDevice(manager);
@@ -228,6 +275,38 @@ describe("http commands", () => {
 });
 
 describe("command status route", () => {
+  test("rejects missing or invalid bearer auth before command lookup runs", async () => {
+    let getCommandCalls = 0;
+
+    const app = new Elysia()
+      .use(createRelayHttpAuthMiddleware({ httpAuthTokens: ["mcp-token-1"] }))
+      .use(
+        createHttpCommandsRoutes({
+          manager: createManager(),
+          commandService: {
+            getCommand() {
+              getCommandCalls += 1;
+              throw new Error("getCommand should not run");
+            },
+          } as unknown as CommandService,
+        }),
+      );
+
+    for (const headers of [undefined, { authorization: "Bearer wrong-token" }]) {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/commands/req_00000000_0000_4000_8000_000000000001", {
+          headers,
+        }),
+      );
+      const json = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(json.error.code).toBe("AUTH_HTTP_BEARER_INVALID");
+    }
+
+    expect(getCommandCalls).toBe(0);
+  });
+
   const statusCases: StatusCase[] = [
     {
       name: "CREATED",
