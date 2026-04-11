@@ -73,6 +73,7 @@ class PhoneGlassesLoopbackTest {
         runCurrent()
 
         assertTrue(phoneEvents.contains(PhoneLocalSessionEvent.SessionReady))
+        assertEquals(1, phoneEvents.count { it is PhoneLocalSessionEvent.SessionReady })
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -113,6 +114,7 @@ class PhoneGlassesLoopbackTest {
 
         val pongEvent = phoneEvents.last { it is PhoneLocalSessionEvent.PongReceived } as PhoneLocalSessionEvent.PongReceived
         assertEquals(1L, pongEvent.seq)
+        assertEquals(1, phoneEvents.count { it is PhoneLocalSessionEvent.PongReceived })
     }
 
     private fun helloConfig() = PhoneHelloConfig(

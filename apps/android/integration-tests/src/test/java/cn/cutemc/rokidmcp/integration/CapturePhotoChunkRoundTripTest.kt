@@ -20,7 +20,8 @@ class CapturePhotoChunkRoundTripTest {
     fun `glasses chunk sender round trips through phone assembler`() = runTest {
         val assembler = IncomingImageAssembler()
         val imageBytes = "jpeg-loopback-payload".encodeToByteArray()
-        var assembled = false
+        var assembledCount = 0
+        val chunkIndexes = mutableListOf<Int>()
         val sender = ImageChunkSender(
             clock = IntegrationClock(1_717_181_000L),
             frameSender = GlassesFrameSender { header, body ->
@@ -36,7 +37,9 @@ class CapturePhotoChunkRoundTripTest {
                         transferId = header.transferId!!,
                         payload = header.payload as ChunkData,
                         body = body!!,
-                    )
+                    ).also {
+                        chunkIndexes += (header.payload as ChunkData).index
+                    }
 
                     LocalMessageType.CHUNK_END -> {
                         val image = assembler.finish(
@@ -50,7 +53,7 @@ class CapturePhotoChunkRoundTripTest {
                         assertEquals(768, image.height)
                         assertEquals(imageBytes.size.toLong(), image.size)
                         assertArrayEquals(imageBytes, image.bytes)
-                        assembled = true
+                        assembledCount += 1
                     }
 
                     else -> error("Unexpected frame type ${header.type}")
@@ -68,7 +71,8 @@ class CapturePhotoChunkRoundTripTest {
             sha256 = ChecksumCalculator().sha256(imageBytes),
         )
 
-        assertEquals(true, assembled)
+        assertEquals(listOf(0, 1, 2, 3, 4), chunkIndexes)
+        assertEquals(1, assembledCount)
     }
 }
 
