@@ -8,7 +8,20 @@ const TEST_ENV = {
   port: 3000,
   heartbeatIntervalMs: 10,
   heartbeatTimeoutMs: 50,
+  httpAuthTokens: ["mcp-token-1"],
+  wsAuthTokens: ["phone-token-1"],
+  helloTimeoutMs: 5000,
 };
+
+function createAuthorizedRequest(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("authorization", "Bearer mcp-token-1");
+
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers,
+  });
+}
 
 describe("relay app", () => {
   test("health route responds", async () => {
@@ -38,12 +51,25 @@ describe("relay app", () => {
       manager: new DeviceSessionManager({ heartbeatTimeoutMs: 50, cleanupIntervalMs: 10 }),
     });
 
-    const response = await app.handle(new Request("http://localhost/api/v1/devices/device-a/status"));
+    const response = await app.handle(createAuthorizedRequest("/api/v1/devices/device-a/status"));
     const json = await response.json();
 
     expect(response.status).toBe(200);
     expect(json.device.deviceId).toBe("device-a");
     expect(json.device.sessionState).toBe("OFFLINE");
+  });
+
+  test("protected routes require bearer auth", async () => {
+    const app = createApp({
+      env: TEST_ENV,
+      manager: new DeviceSessionManager({ heartbeatTimeoutMs: 50, cleanupIntervalMs: 10 }),
+    });
+
+    const response = await app.handle(new Request("http://localhost/api/v1/devices/device-a/status"));
+    const json = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(json.error.code).toBe("AUTH_HTTP_BEARER_INVALID");
   });
 
   test("createApp does not read process env when env and manager are provided", async () => {
@@ -110,7 +136,7 @@ describe("relay app", () => {
     try {
       await Bun.sleep(80);
 
-      const response = await app.handle(new Request("http://localhost/api/v1/devices/device-stale/status"));
+      const response = await app.handle(createAuthorizedRequest("/api/v1/devices/device-stale/status"));
       const json = await response.json();
 
       expect(json.device.sessionState).toBe("STALE");
@@ -125,6 +151,8 @@ describe("readRelayEnv", () => {
   test("throws on invalid numeric values", () => {
     expect(() =>
       readRelayEnv({
+        RELAY_HTTP_AUTH_TOKENS: "mcp-token-1",
+        RELAY_WS_AUTH_TOKENS: "phone-token-1",
         PORT: "abc",
         HOST: "127.0.0.1",
         RELAY_HEARTBEAT_INTERVAL_MS: "5000",
