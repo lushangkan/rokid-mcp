@@ -41,6 +41,12 @@ jobs:
       - name: Run shared protocol tests
         run: ./gradlew --no-daemon :share:test
 
+      - name: Run phone app tests
+        run: ./gradlew --no-daemon :phone-app:test
+
+      - name: Run integration tests
+        run: ./gradlew --no-daemon :integration-tests:test
+
       - name: Build debug APKs
         run: ./gradlew --no-daemon :phone-app:assembleDebug :glasses-app:assembleDebug
 

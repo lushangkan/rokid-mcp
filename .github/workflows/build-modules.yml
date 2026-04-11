@@ -36,3 +36,6 @@ jobs:
 
       - name: Build workspace modules
         run: bun run build
+
+      - name: Run Bun tests
+        run: bun test apps/relay-server/src packages/protocol/src packages/mcp-server/src
