@@ -129,7 +129,7 @@ fun PhoneSettingsScreen(
             if (logs.isEmpty()) {
                 item { Text("No logs yet") }
             } else {
-                items(items = logs, key = { entry -> "${entry.timestampMs}-${entry.tag}-${entry.message}" }) { entry ->
+                items(items = logs, key = { entry -> entry.id }) { entry ->
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("${entry.level} ${entry.tag}", style = MaterialTheme.typography.labelLarge)
                         Text(entry.message, fontFamily = FontFamily.Monospace)

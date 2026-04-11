@@ -67,7 +67,7 @@ fun PhoneMainScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            items(items = logs, key = { entry -> "${entry.timestampMs}-${entry.tag}-${entry.message}" }) { entry ->
+            items(items = logs, key = { entry -> entry.id }) { entry ->
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
