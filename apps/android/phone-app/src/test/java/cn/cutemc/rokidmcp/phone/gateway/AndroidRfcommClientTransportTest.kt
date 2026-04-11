@@ -9,8 +9,13 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -106,13 +111,46 @@ class AndroidRfcommClientTransportTest {
         assertTrue(logs.all { entry -> FULL_ADDRESS !in entry.message })
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `manual stop ignores socket close read failure`() = runTest {
+        val blockingInputStream = BlockingCloseAwareInputStream()
+        val socket = FakeClientSocket(inputStream = blockingInputStream)
+        val transport = AndroidRfcommClientTransport(
+            adapterAvailabilityProvider = BluetoothAdapterAvailabilityProvider { true },
+            socketFactory = RfcommClientSocketFactory { _, _ -> socket },
+            transportScope = backgroundScope,
+        )
+        val events = mutableListOf<PhoneTransportEvent>()
+        val collector = backgroundScope.launch {
+            transport.events.collect(events::add)
+        }
+
+        val startJob = async {
+            transport.start(FULL_ADDRESS)
+        }
+        startJob.await()
+        blockingInputStream.awaitReadStarted()
+
+        transport.stop("manual")
+
+        withTimeout(5_000L) {
+            while (events.none { it is PhoneTransportEvent.ConnectionClosed && it.reason == "manual" }) {
+                delay(10)
+            }
+        }
+
+        assertTrue(events.none { it is PhoneTransportEvent.Failure })
+        assertTrue(transport.state.value == PhoneTransportState.DISCONNECTED)
+        collector.cancel()
+    }
+
     private class FakeClientSocket(
         readBytes: ByteArray = byteArrayOf(),
+        override val inputStream: InputStream = ByteArrayInputStream(readBytes),
+        override val outputStream: OutputStream = ByteArrayOutputStream(),
         private val connectError: IOException? = null,
     ) : RfcommClientSocket {
-        override val inputStream: InputStream = ByteArrayInputStream(readBytes)
-        override val outputStream: OutputStream = ByteArrayOutputStream()
-
         val writtenBytes: ByteArrayOutputStream
             get() = outputStream as ByteArrayOutputStream
 
@@ -123,6 +161,35 @@ class AndroidRfcommClientTransportTest {
         override fun close() {
             inputStream.close()
             outputStream.close()
+        }
+    }
+
+    private class BlockingCloseAwareInputStream : InputStream() {
+        private val readStarted = CountDownLatch(1)
+        private val unblockRead = CountDownLatch(1)
+        @Volatile
+        private var closed = false
+
+        override fun read(): Int {
+            throw UnsupportedOperationException("single-byte reads are not used in this test")
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            readStarted.countDown()
+            unblockRead.await(5, TimeUnit.SECONDS)
+            if (closed) {
+                throw IOException("bt socket closed, read return: -1")
+            }
+            return -1
+        }
+
+        override fun close() {
+            closed = true
+            unblockRead.countDown()
+        }
+
+        fun awaitReadStarted() {
+            assertTrue(readStarted.await(5, TimeUnit.SECONDS))
         }
     }
 

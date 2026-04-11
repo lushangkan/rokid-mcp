@@ -143,35 +143,51 @@ class RelaySessionClient(
     private var heartbeatIntervalMs: Long = RelayProtocolConstants.DEFAULT_HEARTBEAT_INTERVAL_MS
     private var heartbeatJob: Job? = null
     private var heartbeatSeq: Long = 0L
+    private var nextConnectionId: Long = 0L
+    private var activeConnectionId: Long = 0L
+    private var handledTerminalConnectionId: Long? = null
 
     suspend fun connect() {
         if (activeWebSocket == null) {
             val relayUrl = buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required"))
+            val connectionId = registerConnection()
             Timber.tag(LOG_TAG).i("connecting relay websocket to %s", relayUrl.toSafeRelayUrlSummary())
             activeWebSocket = webSocketFactory.connect(
                 relayUrl,
                 object : RelayWebSocketCallbacks {
                     override fun onOpen() {
+                        if (!shouldHandleActiveCallback(connectionId)) {
+                            return
+                        }
                         Timber.tag(LOG_TAG).i("relay websocket opened")
                         controllerScope.launch { onConnected() }
                     }
 
                     override fun onTextMessage(text: String) {
+                        if (!shouldHandleActiveCallback(connectionId)) {
+                            return
+                        }
                         controllerScope.launch { onTextMessage(text) }
                     }
 
                     override fun onClosed(code: Int, reason: String) {
+                        if (!claimTerminalCallback(connectionId)) {
+                            return
+                        }
                         Timber.tag(LOG_TAG).w("relay websocket closed code=%d reason=%s", code, reason.ifBlank { "(empty)" })
-                        controllerScope.launch { onClosed(code, reason) }
+                        controllerScope.launch { onClosed(connectionId, code, reason) }
                     }
 
                     override fun onFailure(error: Throwable) {
+                        if (!claimTerminalCallback(connectionId)) {
+                            return
+                        }
                         Timber.tag(LOG_TAG).e(
                             error,
                             "relay websocket failure url=%s",
                             relayUrl.toSafeRelayUrlSummary(),
                         )
-                        controllerScope.launch { onFailure(error) }
+                        controllerScope.launch { onFailure(connectionId, error) }
                     }
                 },
             )
@@ -186,6 +202,7 @@ class RelaySessionClient(
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
+        markConnectionClosedByClient()
         activeWebSocket?.close(reason = reason)
         activeWebSocket = webSocket
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
@@ -320,6 +337,7 @@ class RelaySessionClient(
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
+        activeWebSocket = webSocket
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
     }
 
@@ -328,7 +346,58 @@ class RelaySessionClient(
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
+        activeWebSocket = webSocket
         internalEvents.emit(RelaySessionEvent.Failed(error.message ?: "relay websocket failure"))
+    }
+
+    private suspend fun onClosed(connectionId: Long, code: Int, reason: String) {
+        clearConnectionTracking(connectionId)
+        onClosed(code, reason)
+    }
+
+    private suspend fun onFailure(connectionId: Long, error: Throwable) {
+        clearConnectionTracking(connectionId)
+        onFailure(error)
+    }
+
+    @Synchronized
+    private fun registerConnection(): Long {
+        nextConnectionId += 1
+        activeConnectionId = nextConnectionId
+        handledTerminalConnectionId = null
+        return activeConnectionId
+    }
+
+    @Synchronized
+    private fun shouldHandleActiveCallback(connectionId: Long): Boolean {
+        return connectionId == activeConnectionId && handledTerminalConnectionId != connectionId
+    }
+
+    @Synchronized
+    private fun claimTerminalCallback(connectionId: Long): Boolean {
+        if (connectionId != activeConnectionId || handledTerminalConnectionId == connectionId) {
+            return false
+        }
+
+        handledTerminalConnectionId = connectionId
+        return true
+    }
+
+    @Synchronized
+    private fun markConnectionClosedByClient() {
+        if (activeConnectionId == 0L) {
+            return
+        }
+
+        handledTerminalConnectionId = activeConnectionId
+        activeConnectionId = 0L
+    }
+
+    @Synchronized
+    private fun clearConnectionTracking(connectionId: Long) {
+        if (activeConnectionId == connectionId || activeConnectionId == 0L) {
+            activeConnectionId = 0L
+        }
     }
 
     fun canSendStateUpdate(): Boolean = sessionId != null
