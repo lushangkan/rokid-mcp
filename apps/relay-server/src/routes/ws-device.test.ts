@@ -9,11 +9,18 @@ import { createHttpCommandsRoutes } from "./http-commands.ts";
 import { buildDeviceWsHandlers, createDeviceWsController } from "./ws-device.ts";
 
 type FakeSocket = {
-  data: { socketId: string; deviceId?: string; sessionId?: string; authToken?: string };
+  data: {
+    socketId: string;
+    deviceId?: string;
+    sessionId?: string;
+    authenticatedPrincipalId?: string;
+    authenticatedScope?: "device";
+    helloTimeout?: ReturnType<typeof setTimeout>;
+  };
   sent: unknown[];
   closeCalls: Array<number | undefined>;
   send: (payload: unknown) => void;
-  close: (code?: number) => void;
+  close: (code?: number, reason?: string) => void;
 };
 
 function createManager() {
@@ -55,21 +62,38 @@ function createSocket(): FakeSocket {
   };
 }
 
-function createHandlers(manager = createManager()) {
+function createHandlers(
+  manager = createManager(),
+  overrides: {
+    helloTimeoutMs?: number;
+    wsAuthTokens?: string[];
+  } = {},
+) {
   return buildDeviceWsHandlers({
     manager,
     commandService: createService(),
     heartbeatIntervalMs: 5000,
     heartbeatTimeoutMs: 15000,
+    helloTimeoutMs: overrides.helloTimeoutMs ?? 5000,
+    wsAuthTokens: overrides.wsAuthTokens ?? ["token-123"],
   });
 }
 
-function createController(manager = createManager(), service = createService()) {
+function createController(
+  manager = createManager(),
+  service = createService(),
+  overrides: {
+    helloTimeoutMs?: number;
+    wsAuthTokens?: string[];
+  } = {},
+) {
   const controller = createDeviceWsController({
     manager,
     commandService: service,
     heartbeatIntervalMs: 5000,
     heartbeatTimeoutMs: 15000,
+    helloTimeoutMs: overrides.helloTimeoutMs ?? 5000,
+    wsAuthTokens: overrides.wsAuthTokens ?? ["token-123"],
   });
 
   return {
@@ -90,14 +114,14 @@ function createSubmitRequest(body: unknown) {
   });
 }
 
-function helloMessage(deviceId = "device-a") {
+function helloMessage(deviceId = "device-a", authToken = "token-123") {
   return JSON.stringify({
     version: PROTOCOL_VERSION,
     type: "hello",
     deviceId,
     timestamp: Date.now(),
     payload: {
-      authToken: "token-123",
+      authToken,
       appVersion: "1.0.0",
       phoneInfo: { model: "pixel" },
       setupState: "INITIALIZED",
@@ -421,6 +445,28 @@ describe("ws device command dispatch", () => {
 });
 
 describe("device websocket handlers", () => {
+  test("valid hello token sends hello_ack, registers the session, and does not persist raw token data", async () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager, { helloTimeoutMs: 10 });
+    const socket = createSocket();
+
+    handlers.open(socket);
+    handlers.message(socket, helloMessage("device-a"));
+    await Bun.sleep(25);
+
+    const ack = socket.sent[0] as { type: string; payload: { sessionId: string } };
+    const status = manager.getCurrentDeviceStatus("device-a");
+
+    expect(socket.closeCalls).toEqual([]);
+    expect(socket.sent).toHaveLength(1);
+    expect(ack.type).toBe("hello_ack");
+    expect(status.device.sessionState).toBe("ONLINE");
+    expect(status.device.sessionId).toBe(ack.payload.sessionId);
+    expect(socket.data.authenticatedScope).toBe("device");
+    expect(socket.data.authenticatedPrincipalId).toBe("device-a");
+    expect(socket.data).not.toHaveProperty("authToken");
+  });
+
   test("pre-hello non-hello messages close connection", () => {
     const manager = createManager();
     const handlers = createHandlers(manager);
@@ -429,6 +475,60 @@ describe("device websocket handlers", () => {
     handlers.message(socket, heartbeatMessage({ sessionId: "ses_missing" }));
 
     expect(socket.closeCalls).toEqual([1008]);
+    expect(manager.getCurrentDeviceStatus("device-a").device.sessionState).toBe("OFFLINE");
+  });
+
+  test("hello with invalid auth token closes 1008 without hello_ack or session registration", () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager, { wsAuthTokens: ["trusted-token"] });
+    const socket = createSocket();
+
+    handlers.open(socket);
+    handlers.message(socket, helloMessage("device-a", "bad-token"));
+
+    expect(socket.closeCalls).toEqual([1008]);
+    expect(socket.sent).toEqual([]);
+    expect(manager.getCurrentDeviceStatus("device-a").device.sessionState).toBe("OFFLINE");
+  });
+
+  test("hello missing auth token closes 1008 without hello_ack or session registration", () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager);
+    const socket = createSocket();
+
+    handlers.open(socket);
+    handlers.message(
+      socket,
+      JSON.stringify({
+        version: PROTOCOL_VERSION,
+        type: "hello",
+        deviceId: "device-a",
+        timestamp: Date.now(),
+        payload: {
+          appVersion: "1.0.0",
+          phoneInfo: { model: "pixel" },
+          setupState: "INITIALIZED",
+          runtimeState: "READY",
+          capabilities: ["display_text"],
+        },
+      }),
+    );
+
+    expect(socket.closeCalls).toEqual([1008]);
+    expect(socket.sent).toEqual([]);
+    expect(manager.getCurrentDeviceStatus("device-a").device.sessionState).toBe("OFFLINE");
+  });
+
+  test("idle unauthenticated sockets close with 1008 after hello timeout", async () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager, { helloTimeoutMs: 10 });
+    const socket = createSocket();
+
+    handlers.open(socket);
+    await Bun.sleep(25);
+
+    expect(socket.closeCalls).toEqual([1008]);
+    expect(socket.sent).toEqual([]);
     expect(manager.getCurrentDeviceStatus("device-a").device.sessionState).toBe("OFFLINE");
   });
 
