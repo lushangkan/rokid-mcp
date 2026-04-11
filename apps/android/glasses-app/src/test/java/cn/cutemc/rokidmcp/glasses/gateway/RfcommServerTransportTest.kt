@@ -22,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -185,6 +186,63 @@ class RfcommServerTransportTest {
         logs.assertLog(Log.ERROR, RFCOMM_SERVER_TAG, "failed to start RFCOMM server transport")
         logs.assertLog(Log.ERROR, RFCOMM_SERVER_TAG, "state -> ERROR")
         assertEquals(GlassesTransportState.ERROR, transport.state.value)
+    }
+
+    @Test
+    fun `malformed frame decode failure stays visible at rfcomm caller site`() {
+        val serverSocket = FakeServerSocket()
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = { FakeRfcommBluetoothAdapter(serverSocket) },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+        val clientInput = ControlledInputStream()
+        val client = FakeClientSocket(
+            remoteDevice = RfcommRemoteDeviceInfo(
+                address = "12:34:56:78:9A:BC",
+                bondState = BluetoothDevice.BOND_BONDED,
+            ),
+            input = clientInput,
+            output = RecordingOutputStream(),
+        )
+        val events = mutableListOf<GlassesTransportEvent>()
+        val eventJob = transportScope.launch {
+            transport.events.collect { events += it }
+        }
+
+        val logs = captureTimberLogs { tree ->
+            serverSocket.enqueueAcceptedClient(client)
+
+            runBlocking { transport.start() }
+
+            waitUntil("bonded client attach") {
+                transport.state.value == GlassesTransportState.CONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> CONNECTED") }
+            }
+
+            clientInput.enqueue(byteArrayOf(0x01, 0x02, 0x03))
+            waitUntil("frame decode failure") {
+                transport.state.value == GlassesTransportState.ERROR &&
+                    events.any { it is GlassesTransportEvent.Failure } &&
+                    tree.logs.any { entry -> entry.message.contains("RFCOMM server client connection failed") }
+            }
+
+            runBlocking { transport.stop("test-stop") }
+        }
+
+        transportScope.cancel()
+        runBlocking { eventJob.join() }
+
+        val failure = events.filterIsInstance<GlassesTransportEvent.Failure>().single()
+        assertTrue(failure.cause.message?.contains("rfcomm server frame decode failed") == true)
+        assertTrue(failure.cause.cause?.message?.contains("Frame is shorter than fixed header") == true)
+        logs.assertLog(Log.ERROR, RFCOMM_SERVER_TAG, "RFCOMM server client connection failed")
+        logs.assertLog(Log.ERROR, RFCOMM_SERVER_TAG, "state -> ERROR")
+        logs.assertNoSensitiveData()
+        assertTrue(logs.any { entry -> entry.throwable?.cause?.message?.contains("Frame is shorter than fixed header") == true })
     }
 }
 
