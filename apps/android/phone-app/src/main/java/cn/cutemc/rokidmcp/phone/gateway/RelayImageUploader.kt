@@ -83,8 +83,9 @@ class RelayImageUploader(
         val response = try {
             httpExecutor.execute(request.build())
         } catch (error: Exception) {
+            val safeError = error.redactRelaySecrets()
             Timber.tag(LOG_TAG).e(
-                error,
+                safeError,
                 "relay image upload failed requestId=%s transferId=%s imageId=%s url=%s",
                 input.requestId,
                 input.transferId,

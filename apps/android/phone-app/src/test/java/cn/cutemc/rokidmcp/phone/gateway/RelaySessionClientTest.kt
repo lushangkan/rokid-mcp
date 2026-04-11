@@ -190,6 +190,103 @@ class RelaySessionClientTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `auth failure close code 1008 redacts secrets in logs and emitted event`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var callbacks: RelayWebSocketCallbacks? = null
+        val client = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_000L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "auth-from-config",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                FakeRelayWebSocket()
+            },
+        )
+        val events = mutableListOf<RelaySessionEvent>()
+        backgroundScope.launch {
+            client.events.collect { events += it }
+        }
+        runCurrent()
+
+        val logs = captureTimberLogsSuspend {
+            client.connect()
+            callbacks!!.onClosed(1008, "authToken=auth-from-config Bearer bearer-secret uploadToken=upl_test_1")
+            runCurrent()
+        }
+
+        logs.assertLog(Log.WARN, "relay-session", "relay websocket closed code=1008")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { entry ->
+            entry.message.contains("auth-from-config") ||
+                entry.message.contains("bearer-secret") ||
+                entry.message.contains("upl_test_1")
+        })
+
+        val closeEvent = events.filterIsInstance<RelaySessionEvent.ConnectionClosed>().single()
+        assertEquals(1008, closeEvent.code)
+        assertFalse(closeEvent.reason.contains("auth-from-config"))
+        assertFalse(closeEvent.reason.contains("bearer-secret"))
+        assertFalse(closeEvent.reason.contains("upl_test_1"))
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `auth failure exception redacts secrets in logs and failed event`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var callbacks: RelayWebSocketCallbacks? = null
+        val client = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_000L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "auth-from-config",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                FakeRelayWebSocket()
+            },
+        )
+        val events = mutableListOf<RelaySessionEvent>()
+        backgroundScope.launch {
+            client.events.collect { events += it }
+        }
+        runCurrent()
+
+        val logs = captureTimberLogsSuspend {
+            client.connect()
+            callbacks!!.onFailure(IllegalStateException("relay auth failed authToken=auth-from-config Bearer bearer-secret uploadToken=upl_test_1"))
+            runCurrent()
+        }
+
+        logs.assertLog(Log.ERROR, "relay-session", "relay websocket failure url=wss://relay.example.com/ws/device")
+        logs.assertLog(Log.ERROR, "relay-session", "relay websocket failure")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { entry ->
+            entry.message.contains("auth-from-config") ||
+                entry.message.contains("bearer-secret") ||
+                entry.message.contains("upl_test_1") ||
+                entry.throwable?.message.orEmpty().contains("auth-from-config") ||
+                entry.throwable?.message.orEmpty().contains("bearer-secret") ||
+                entry.throwable?.message.orEmpty().contains("upl_test_1")
+        })
+
+        val failureEvent = events.filterIsInstance<RelaySessionEvent.Failed>().single()
+        assertFalse(failureEvent.message.contains("auth-from-config"))
+        assertFalse(failureEvent.message.contains("bearer-secret"))
+        assertFalse(failureEvent.message.contains("upl_test_1"))
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `duplicate websocket terminal callbacks are ignored after the first close`() = runTest {
         val runtimeStore = PhoneRuntimeStore()
         var callbacks: RelayWebSocketCallbacks? = null
