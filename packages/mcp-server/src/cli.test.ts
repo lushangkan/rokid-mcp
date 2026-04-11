@@ -12,9 +12,9 @@ type SpawnResult = {
   stdout: string;
 };
 
-function runBunProcess(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<SpawnResult> {
+function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(command, args, {
       cwd: join(import.meta.dir, ".."),
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -36,6 +36,14 @@ function runBunProcess(args: string[], env: NodeJS.ProcessEnv = process.env): Pr
       resolve({ exitCode, stderr, stdout });
     });
   });
+}
+
+function runBunProcess(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<SpawnResult> {
+  return runProcess(process.execPath, args, env);
+}
+
+function runNodeProcess(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<SpawnResult> {
+  return runProcess("node", args, env);
 }
 
 describe("runStdioServerCli", () => {
@@ -88,7 +96,40 @@ describe("runStdioServerCli", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("direct CLI startup exits non-zero and writes to stderr when env is missing", async () => {
+  test("startup with injected mocks does not pollute stdout", async () => {
+    const cliModuleUrl = pathToFileURL(join(import.meta.dir, "cli.ts")).href;
+
+    const result = await runBunProcess([
+      "--eval",
+      `
+        const { runStdioServerCli } = await import(${JSON.stringify(cliModuleUrl)});
+        await runStdioServerCli({
+          readEnv: () => ({
+            relayBaseUrl: "https://relay.example.com",
+            requestTimeoutMs: 5_000,
+            defaultDeviceId: "rokid_glasses_01",
+            commandPollIntervalMs: 250,
+            commandTimeoutMs: 30_000,
+          }),
+          startServer: async () => undefined,
+          logger: {
+            error: (...args) => {
+              throw new Error("unexpected stderr logger call: " + args.join(":"));
+            },
+          },
+          exit: (code) => {
+            throw new Error("unexpected exit: " + code);
+          },
+        });
+      `,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+  });
+
+  test("source CLI startup exits non-zero and writes to stderr when env is missing", async () => {
     const cliEntryPath = join(import.meta.dir, "cli.ts");
     const env = { ...process.env };
 
@@ -96,6 +137,21 @@ describe("runStdioServerCli", () => {
     delete env.ROKID_DEFAULT_DEVICE_ID;
 
     const result = await runBunProcess([cliEntryPath], env);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Failed to start MCP stdio server");
+    expect(result.stderr).toContain("Missing required environment variable: RELAY_BASE_URL");
+  });
+
+  test("built CLI exits non-zero and keeps stdout clean when env is missing", async () => {
+    const builtCliEntryPath = join(import.meta.dir, "..", "dist", "cli.js");
+    const env = { ...process.env };
+
+    delete env.RELAY_BASE_URL;
+    delete env.ROKID_DEFAULT_DEVICE_ID;
+
+    const result = await runNodeProcess([builtCliEntryPath], env);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
