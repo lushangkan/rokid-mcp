@@ -1,9 +1,10 @@
-import type { GetDeviceStatusParams, GetDeviceStatusResponse } from "../../../protocol/src/index.js";
+import type { GetDeviceStatusParams, GetDeviceStatusResponse } from "@rokid-mcp/protocol";
 import { RelayRequestError } from "../lib/errors.js";
 import { validateRelayGetDeviceStatusResponse } from "./relay-response-validator.js";
 
 export type RelayClientConfig = {
   relayBaseUrl: string;
+  relayHttpAuthToken: string;
   requestTimeoutMs: number;
 };
 
@@ -23,6 +24,9 @@ export function createRelayClient(config: RelayClientConfig): RelayClient {
       try {
         response = await fetch(`${config.relayBaseUrl}/api/v1/devices/${encodeURIComponent(params.deviceId)}/status`, {
           method: "GET",
+          headers: {
+            Authorization: `Bearer ${config.relayHttpAuthToken}`,
+          },
           signal: controller.signal,
         });
       } catch (error) {
