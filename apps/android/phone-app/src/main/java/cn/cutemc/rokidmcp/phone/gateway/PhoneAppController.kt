@@ -358,19 +358,21 @@ class PhoneAppController(
             }
 
             is RelaySessionEvent.Failed -> {
-                Timber.tag("controller").e("relay session failed: %s", event.message)
+                val safeMessage = event.message.redactRelaySecrets()
+                Timber.tag("controller").e("relay session failed: %s", safeMessage)
                 val current = runtimeStore.snapshot.value
                 val next = current.copy(
                     uplinkState = PhoneUplinkState.ERROR,
                     runtimeState = projectRuntimeState(PhoneUplinkState.ERROR, current.runtimeState),
                     lastErrorCode = PhoneGatewayErrorCodes.RELAY_SESSION_ERROR,
-                    lastErrorMessage = event.message,
+                    lastErrorMessage = safeMessage,
                 )
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
-                scheduleRelayReconnect("relay failed: ${event.message}")
+                scheduleRelayReconnect("relay failed: $safeMessage")
             }
             is RelaySessionEvent.ConnectionClosed -> {
+                val safeReason = event.reason.redactRelaySecrets()
                 val current = runtimeStore.snapshot.value
                 val next = current.copy(
                     uplinkState = PhoneUplinkState.OFFLINE,
@@ -378,7 +380,7 @@ class PhoneAppController(
                 )
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
-                scheduleRelayReconnect("relay closed: ${event.code} ${event.reason}")
+                scheduleRelayReconnect("relay closed: ${event.code} $safeReason")
             }
         }
     }

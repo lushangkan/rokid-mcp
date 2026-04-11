@@ -5,6 +5,7 @@ import cn.cutemc.rokidmcp.phone.logging.PhoneLogLevel
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogTree
 import cn.cutemc.rokidmcp.phone.logging.assertLog
+import cn.cutemc.rokidmcp.phone.logging.assertNoSensitiveData
 import cn.cutemc.rokidmcp.phone.logging.captureTimberLogs
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
@@ -859,6 +860,66 @@ class PhoneAppControllerTest {
         assertEquals(PhoneUplinkState.ERROR, runtimeStore.snapshot.value.uplinkState)
         assertEquals(PhoneRuntimeState.ERROR, runtimeStore.snapshot.value.runtimeState)
         assertEquals("RELAY_SESSION_ERROR", runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `relay auth close code 1008 keeps reconnect flow and redacts controller logs`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var connectCalls = 0
+        var callbacks: RelayWebSocketCallbacks? = null
+        val relaySessionClient = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_171_900L),
+            config = PhoneGatewayConfig(
+                deviceId = "phone-device",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+                reconnectDelayMs = 2_500L,
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                connectCalls += 1
+                FakeRelayWebSocket()
+            },
+        )
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                    reconnectDelayMs = 2_500L,
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            createRelaySessionClient = { relaySessionClient },
+            controllerScope = backgroundScope,
+        )
+
+        val logs = captureTimberLogs {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+            runCurrent()
+            callbacks!!.onClosed(1008, "authToken=auth-from-config Bearer bearer-secret uploadToken=upl_test_1")
+            runCurrent()
+            advanceTimeBy(2_500L)
+            runCurrent()
+        }
+
+        assertEquals(2, connectCalls)
+        logs.assertLog(Log.INFO, "controller", "scheduling relay reconnect in 2500ms due to: relay closed: 1008")
+        logs.assertLog(Log.INFO, "controller", "executing scheduled relay reconnect")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { entry ->
+            entry.message.contains("auth-from-config") ||
+                entry.message.contains("bearer-secret") ||
+                entry.message.contains("upl_test_1")
+        })
     }
 
     @Test

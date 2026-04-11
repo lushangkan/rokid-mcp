@@ -58,6 +58,19 @@ class PhoneLocalConfigStoreTest {
         assertEquals(expected, loaded)
     }
 
+    @Test
+    fun `save persists auth token under existing authToken key`() {
+        store.save(
+            PhoneLocalConfig(
+                deviceId = "phone-1234abcd",
+                authToken = "token-abc",
+                relayBaseUrl = "https://relay.example.com",
+            ),
+        )
+
+        assertEquals("token-abc", prefs.getString("authToken", null))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `save rejects invalid deviceId`() {
         store.save(

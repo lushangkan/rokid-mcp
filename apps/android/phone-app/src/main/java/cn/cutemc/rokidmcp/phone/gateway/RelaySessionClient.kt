@@ -181,20 +181,22 @@ class RelaySessionClient(
                         if (!claimTerminalCallback(connectionId)) {
                             return
                         }
-                        Timber.tag(LOG_TAG).w("relay websocket closed code=%d reason=%s", code, reason.ifBlank { "(empty)" })
-                        controllerScope.launch { onClosed(connectionId, code, reason) }
+                        val safeReason = reason.redactRelaySecrets()
+                        Timber.tag(LOG_TAG).w("relay websocket closed code=%d reason=%s", code, safeReason.ifBlank { "(empty)" })
+                        controllerScope.launch { onClosed(connectionId, code, safeReason) }
                     }
 
                     override fun onFailure(error: Throwable) {
                         if (!claimTerminalCallback(connectionId)) {
                             return
                         }
+                        val safeError = error.redactRelaySecrets()
                         Timber.tag(LOG_TAG).e(
-                            error,
+                            safeError,
                             "relay websocket failure url=%s",
                             relayUrl.toSafeRelayUrlSummary(),
                         )
-                        controllerScope.launch { onFailure(connectionId, error) }
+                        controllerScope.launch { onFailure(connectionId, safeError) }
                     }
                 },
             )
@@ -342,6 +344,7 @@ class RelaySessionClient(
     }
 
     suspend fun onClosed(code: Int, reason: String) {
+        val safeReason = reason.redactRelaySecrets()
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
@@ -349,18 +352,19 @@ class RelaySessionClient(
         activeWebSocket = webSocket
 
         if (!isManualDisconnect && wasActiveSocket) {
-            internalEvents.emit(RelaySessionEvent.ConnectionClosed(code, reason))
+            internalEvents.emit(RelaySessionEvent.ConnectionClosed(code, safeReason))
         }
         internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
     }
 
     suspend fun onFailure(error: Throwable) {
-        Timber.tag(LOG_TAG).e(error, "relay websocket failure")
+        val safeError = error.redactRelaySecrets()
+        Timber.tag(LOG_TAG).e(safeError, "relay websocket failure")
         heartbeatJob?.cancel()
         heartbeatJob = null
         sessionId = null
         activeWebSocket = webSocket
-        internalEvents.emit(RelaySessionEvent.Failed(error.message ?: "relay websocket failure"))
+        internalEvents.emit(RelaySessionEvent.Failed(safeError.message ?: "relay websocket failure"))
     }
 
     private suspend fun onClosed(connectionId: Long, code: Int, reason: String) {
