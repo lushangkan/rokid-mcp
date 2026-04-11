@@ -560,16 +560,15 @@ class PhoneLocalLinkSessionTest {
             runCurrent()
         }
 
-        assertTrue(
-            events.any {
-                it is PhoneLocalSessionEvent.SessionFailed &&
-                    it.code == "BLUETOOTH_PROTOCOL_ERROR" &&
-                    it.message.contains("failed to decode local frame")
-            },
-        )
+        val failure = events.filterIsInstance<PhoneLocalSessionEvent.SessionFailed>().single()
+
+        assertEquals("BLUETOOTH_PROTOCOL_ERROR", failure.code)
+        assertTrue(failure.message.contains("failed to decode local frame"))
+        assertTrue(failure.message.contains("Frame is shorter than fixed header"))
         logs.assertLog(Log.ERROR, "local-session", "failed to decode local frame from glasses")
         logs.assertLog(Log.ERROR, "local-session", "local session failed code=BLUETOOTH_PROTOCOL_ERROR")
         logs.assertNoSensitiveData()
+        assertTrue(logs.any { it.throwable?.message?.contains("Frame is shorter than fixed header") == true })
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
