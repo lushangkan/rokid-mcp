@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Elysia } from "elysia";
 
+import { createRelayHttpAuthMiddleware } from "../lib/auth-middleware.ts";
 import { DefaultCommandIdGenerator } from "../modules/command/id-generator.ts";
 import { LocalFileStorage } from "../modules/image/file-storage.ts";
 import { ImageService } from "../modules/image/image-service.ts";
@@ -141,7 +143,9 @@ describe("image upload routes", () => {
       fileStorage: new LocalFileStorage({ rootDir: dir }),
       idGenerator: createDeterministicIdGenerator(),
     });
-    const app = createHttpImagesRoutes({ imageService });
+    const app = new Elysia()
+      .use(createRelayHttpAuthMiddleware({ httpAuthTokens: ["mcp-token-1"] }))
+      .use(createHttpImagesRoutes({ imageService }));
     const reservation = imageService.reserve({
       requestId: "req_abc123",
       deviceId: "rokid_glasses_01",
@@ -167,9 +171,77 @@ describe("image upload routes", () => {
     expect(response.status).toBe(403);
     expect((await response.json()).error.code).toBe("AUTH_UPLOAD_TOKEN_INVALID");
   });
+
+  test("image upload bypasses bearer auth and still validates request headers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rokid-http-images-"));
+    tempDirs.push(dir);
+
+    const imageService = new ImageService({
+      clock: () => 1_700_000_000_000,
+      fileStorage: new LocalFileStorage({ rootDir: dir }),
+      idGenerator: createDeterministicIdGenerator(),
+    });
+    const app = new Elysia()
+      .use(createRelayHttpAuthMiddleware({ httpAuthTokens: ["mcp-token-1"] }))
+      .use(createHttpImagesRoutes({ imageService }));
+    const reservation = imageService.reserve({
+      requestId: "req_abc123",
+      deviceId: "rokid_glasses_01",
+    });
+    const bytes = createJpegBytes();
+
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/v1/images/${reservation.imageId}?uploadToken=${reservation.uploadToken}`,
+        {
+          method: "PUT",
+          headers: {
+            "content-type": "image/jpeg",
+          },
+          body: bytes,
+        },
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("IMAGE_UPLOAD_REQUEST_INVALID");
+  });
 });
 
 describe("image download routes", () => {
+  test("rejects missing or invalid bearer auth before image lookup runs", async () => {
+    let metadataCalls = 0;
+    let downloadCalls = 0;
+
+    const app = new Elysia()
+      .use(createRelayHttpAuthMiddleware({ httpAuthTokens: ["mcp-token-1"] }))
+      .use(
+        createHttpImagesRoutes({
+          imageService: {
+            getImageDownload() {
+              downloadCalls += 1;
+              throw new Error("download should not run");
+            },
+            getImageDownloadMetadata() {
+              metadataCalls += 1;
+              throw new Error("metadata should not run");
+            },
+          } as unknown as ImageService,
+        }),
+      );
+
+    for (const headers of [undefined, { authorization: "Bearer wrong-token" }]) {
+      const response = await app.handle(new Request("http://localhost/api/v1/images/img_missing123", { headers }));
+      const json = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(json.error.code).toBe("AUTH_HTTP_BEARER_INVALID");
+    }
+
+    expect(metadataCalls).toBe(0);
+    expect(downloadCalls).toBe(0);
+  });
+
   test("image download returns not found for unknown images", async () => {
     const dir = await mkdtemp(join(tmpdir(), "rokid-http-images-"));
     tempDirs.push(dir);
