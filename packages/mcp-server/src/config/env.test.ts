@@ -6,14 +6,26 @@ describe("readMcpEnv", () => {
   test("reads defaults when optional values are missing", () => {
     const env = readMcpEnv({
       RELAY_BASE_URL: "https://relay.example.com",
+      RELAY_HTTP_AUTH_TOKEN: "test-token",
       ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
     });
 
     expect(env.relayBaseUrl).toBe("https://relay.example.com");
+    expect(env.relayHttpAuthToken).toBe("test-token");
     expect(env.requestTimeoutMs).toBe(5000);
     expect(env.defaultDeviceId).toBe("rokid_glasses_01");
     expect(env.commandPollIntervalMs).toBe(1000);
     expect(env.commandTimeoutMs).toBe(90000);
+  });
+
+  test("trims RELAY_HTTP_AUTH_TOKEN before returning it", () => {
+    const env = readMcpEnv({
+      RELAY_BASE_URL: "https://relay.example.com",
+      RELAY_HTTP_AUTH_TOKEN: "  test-token  ",
+      ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
+    });
+
+    expect(env.relayHttpAuthToken).toBe("test-token");
   });
 
   test("throws when RELAY_BASE_URL is missing", () => {
@@ -24,14 +36,35 @@ describe("readMcpEnv", () => {
     expect(() =>
       readMcpEnv({
         RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_HTTP_AUTH_TOKEN: "test-token",
       })
     ).toThrow("Missing required environment variable: ROKID_DEFAULT_DEVICE_ID");
+  });
+
+  test("throws when RELAY_HTTP_AUTH_TOKEN is missing", () => {
+    expect(() =>
+      readMcpEnv({
+        RELAY_BASE_URL: "https://relay.example.com",
+        ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
+      })
+    ).toThrow("Missing required environment variable: RELAY_HTTP_AUTH_TOKEN");
+  });
+
+  test("throws when RELAY_HTTP_AUTH_TOKEN is blank", () => {
+    expect(() =>
+      readMcpEnv({
+        RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_HTTP_AUTH_TOKEN: "   ",
+        ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
+      })
+    ).toThrow("Environment variable RELAY_HTTP_AUTH_TOKEN must not be blank");
   });
 
   test("throws when ROKID_DEFAULT_DEVICE_ID is invalid", () => {
     expect(() =>
       readMcpEnv({
         RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_HTTP_AUTH_TOKEN: "test-token",
         ROKID_DEFAULT_DEVICE_ID: "bad id with spaces",
       })
     ).toThrow("Invalid device id environment variable: ROKID_DEFAULT_DEVICE_ID");
@@ -41,6 +74,7 @@ describe("readMcpEnv", () => {
     expect(() =>
       readMcpEnv({
         RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_HTTP_AUTH_TOKEN: "test-token",
         ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
         RELAY_REQUEST_TIMEOUT_MS: "oops",
       })
@@ -51,6 +85,7 @@ describe("readMcpEnv", () => {
     expect(() =>
       readMcpEnv({
         RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_HTTP_AUTH_TOKEN: "test-token",
         ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
         RELAY_REQUEST_TIMEOUT_MS: "0",
       })
@@ -61,6 +96,7 @@ describe("readMcpEnv", () => {
     expect(() =>
       readMcpEnv({
         RELAY_BASE_URL: "https://relay.example.com",
+        RELAY_HTTP_AUTH_TOKEN: "test-token",
         ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
         RELAY_REQUEST_TIMEOUT_MS: "1.5",
       })
@@ -71,6 +107,7 @@ describe("readMcpEnv", () => {
     expect(() =>
       readMcpEnv({
         RELAY_BASE_URL: "not-a-url",
+        RELAY_HTTP_AUTH_TOKEN: "test-token",
         ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
       })
     ).toThrow("Invalid URL environment variable: RELAY_BASE_URL");
@@ -79,6 +116,7 @@ describe("readMcpEnv", () => {
   test("prefers MCP_REQUEST_TIMEOUT_MS over legacy relay timeout env", () => {
     const env = readMcpEnv({
       RELAY_BASE_URL: "https://relay.example.com",
+      RELAY_HTTP_AUTH_TOKEN: "test-token",
       ROKID_DEFAULT_DEVICE_ID: "rokid_glasses_01",
       MCP_REQUEST_TIMEOUT_MS: "7000",
       RELAY_REQUEST_TIMEOUT_MS: "2000",
