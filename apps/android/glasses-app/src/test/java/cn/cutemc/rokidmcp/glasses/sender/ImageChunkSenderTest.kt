@@ -114,4 +114,31 @@ class ImageChunkSenderTest {
         logs.assertNoSensitiveData()
         assertTrue(logs.none { entry -> entry.message.contains("abcdefghij") })
     }
+
+    @Test
+    fun `sender logs avoid raw image byte markers`() = runTest {
+        val sender = ImageChunkSender(
+            clock = FakeClock(1_717_180_075L),
+            frameSender = GlassesFrameSender { _, _ -> Unit },
+            chunkSizeBytes = 8,
+        )
+
+        val logs = captureTimberLogs {
+            runBlocking {
+                sender.send(
+                    requestId = "req_capture_redaction",
+                    transferId = "trf_capture_redaction",
+                    imageBytes = "imageBytes chunkBytes authToken".encodeToByteArray(),
+                    width = 320,
+                    height = 240,
+                    sha256 = "sha256-redaction",
+                )
+            }
+        }
+
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer start requestId=req_capture_redaction transferId=trf_capture_redaction totalBytes=31")
+        logs.assertLog(Log.INFO, "image-chunk", "image transfer complete requestId=req_capture_redaction transferId=trf_capture_redaction")
+        logs.assertNoSensitiveData()
+        assertTrue(logs.none { entry -> entry.message.contains("imageBytes") || entry.message.contains("chunkBytes") })
+    }
 }
