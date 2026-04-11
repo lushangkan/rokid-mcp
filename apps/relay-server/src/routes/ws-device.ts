@@ -15,6 +15,7 @@ import {
 import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
+import { validateTokenAgainstAllowlist } from "../lib/auth.ts";
 import { logger, toLogError, type LogContext } from "../lib/logger.ts";
 import { CommandService, CommandServiceError } from "../modules/command/command-service.ts";
 import type { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
@@ -23,7 +24,9 @@ type DeviceWsAuthState = {
   deviceId?: string;
   sessionId?: string;
   socketId: string;
-  authToken?: string;
+  authenticatedPrincipalId?: string;
+  authenticatedScope?: "device";
+  helloTimeout?: ReturnType<typeof setTimeout>;
 };
 
 type DeviceSocketLike = {
@@ -37,6 +40,8 @@ type DeviceWsHandlersOptions = {
   commandService: CommandService;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
+  helloTimeoutMs: number;
+  wsAuthTokens: string[];
 };
 
 const CLOSE_UNSUPPORTED_DATA = 1003;
@@ -184,6 +189,20 @@ function sendOutboundMessage(
     ws.close(CLOSE_INTERNAL_ERROR);
     return false;
   }
+}
+
+function clearHelloTimeout(ws: DeviceSocketLike) {
+  if (!ws.data.helloTimeout) {
+    return;
+  }
+
+  clearTimeout(ws.data.helloTimeout);
+  delete ws.data.helloTimeout;
+}
+
+function closeSocket(ws: DeviceSocketLike, code: number, reason?: string) {
+  clearHelloTimeout(ws);
+  ws.close(code, reason);
 }
 
 export function buildDeviceWsHandlers(options: DeviceWsHandlersOptions) {
@@ -384,9 +403,23 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
   const handlers = {
     open(ws: DeviceSocketLike) {
       ws.data.socketId ??= createSocketId();
+      clearHelloTimeout(ws);
+      ws.data.helloTimeout = setTimeout(() => {
+        if (hasAuthenticatedSession(ws)) {
+          return;
+        }
+
+        logger.error("phone hello timed out before authentication", {
+          socketId: ws.data.socketId,
+          closeCode: CLOSE_POLICY_VIOLATION,
+          helloTimeoutMs: options.helloTimeoutMs,
+        });
+        closeSocket(ws, CLOSE_POLICY_VIOLATION);
+      }, options.helloTimeoutMs);
 
       logger.info("phone socket opened", {
         socketId: ws.data.socketId,
+        helloTimeoutMs: options.helloTimeoutMs,
       });
     },
 
@@ -399,7 +432,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           socketId: ws.data.socketId,
           closeCode: parsed.closeCode,
         });
-        ws.close(parsed.closeCode);
+        closeSocket(ws, parsed.closeCode);
         return;
       }
 
@@ -417,6 +450,23 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           }),
         );
 
+        if (!validateTokenAgainstAllowlist(inbound.payload.authToken, options.wsAuthTokens)) {
+          logger.error(
+            "phone hello rejected due to invalid websocket auth token",
+            createWsLogContext({
+              deviceId: inbound.deviceId,
+              socketId: ws.data.socketId,
+              closeCode: CLOSE_POLICY_VIOLATION,
+            }),
+          );
+          closeSocket(ws, CLOSE_POLICY_VIOLATION);
+          return;
+        }
+
+        clearHelloTimeout(ws);
+        ws.data.authenticatedScope = "device";
+        ws.data.authenticatedPrincipalId = inbound.deviceId;
+
         const sessionId = options.manager.registerHello({
           deviceId: inbound.deviceId,
           socketId: ws.data.socketId,
@@ -430,7 +480,6 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
         options.manager.confirmHello(inbound.deviceId, sessionId, ws.data.socketId);
         ws.data.deviceId = inbound.deviceId;
         ws.data.sessionId = sessionId;
-        ws.data.authToken = inbound.payload.authToken;
         if (!hasAuthenticatedSession(ws)) {
           logger.error(
             "phone hello authentication state invalid",
@@ -440,7 +489,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
               socketId: ws.data.socketId,
             }),
           );
-          ws.close(CLOSE_INTERNAL_ERROR);
+          closeSocket(ws, CLOSE_INTERNAL_ERROR);
           return;
         }
 
@@ -478,7 +527,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           messageType: inbound.type,
           closeCode: CLOSE_POLICY_VIOLATION,
         });
-        ws.close(CLOSE_POLICY_VIOLATION);
+        closeSocket(ws, CLOSE_POLICY_VIOLATION);
         return;
       }
 
@@ -501,7 +550,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
             closeCode: CLOSE_POLICY_VIOLATION,
           }),
         );
-        ws.close(CLOSE_POLICY_VIOLATION);
+        closeSocket(ws, CLOSE_POLICY_VIOLATION);
         return;
       }
 
@@ -549,7 +598,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
           closeCode: CLOSE_POLICY_VIOLATION,
         }),
       );
-        ws.close(CLOSE_POLICY_VIOLATION);
+        closeSocket(ws, CLOSE_POLICY_VIOLATION);
         return;
       }
 
@@ -557,6 +606,8 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
     },
 
     close(ws: DeviceSocketLike) {
+      clearHelloTimeout(ws);
+
       if (!hasAuthenticatedSession(ws)) {
         logger.info("phone socket closed before authentication", {
           socketId: ws.data.socketId,
