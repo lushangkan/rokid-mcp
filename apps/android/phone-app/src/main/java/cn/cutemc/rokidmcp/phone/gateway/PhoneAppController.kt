@@ -414,22 +414,6 @@ class PhoneAppController(
         isLocalSessionReady = false
     }
 
-    private fun scheduleReconnect(reason: String) {
-        val target = lastStartTargetDeviceAddress ?: return
-        val config = lastEffectiveConfig ?: return
-        val delayMs = config.reconnectDelayMs
-
-        pendingReconnectJob?.cancel()
-
-        Timber.tag("controller").i("scheduling reconnect in ${delayMs}ms due to: $reason")
-
-        pendingReconnectJob = controllerScope.launch {
-            delay(delayMs)
-            Timber.tag("controller").i("executing scheduled reconnect")
-            start(target, config)
-        }
-    }
-
     private fun scheduleRelayReconnect(reason: String) {
         val config = lastEffectiveConfig ?: return
         val delayMs = config.reconnectDelayMs

@@ -1,0 +1,4 @@
+- LSP diagnostics could not be collected for Kotlin files because Kotlin LSP initialization timed out twice in this environment.
+- `:phone-app:testDebugUnitTest --tests "cn.cutemc.rokidmcp.phone.ui.settings.PhoneSettingsViewModelTest"` currently fails under Robolectric with `Unsupported class file major version 69`, which appears environment/toolchain-related rather than caused by the reconnect-delay code path.
+- Final audit: targeted unit run failed for Robolectric-backed suites (PhoneLocalConfigStoreTest, PhoneSettingsViewModelTest) with Unsupported class file major version 69, so the reconnect-delay verification matrix is not currently green in this environment.
+- Final audit: PhoneAppControllerTest still contains a stale expectation in connection closed tears down session so timeout does not regress state later; after the new delayed auto-reconnect flow it now observes STARTING instead of STOPPED after the wait window.
