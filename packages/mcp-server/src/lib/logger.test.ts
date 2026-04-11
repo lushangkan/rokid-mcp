@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-import { logger } from "./logger";
+import { logger } from "./logger.js";
 
 describe("logger", () => {
   const originalError = console.error;
