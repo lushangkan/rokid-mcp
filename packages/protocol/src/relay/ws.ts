@@ -35,25 +35,25 @@ export const RelayHelloCapabilitiesSchema = Type.Array(CapabilitySchema, {
 
 export const PhoneInfoSchema = Type.Object(
   {
-    brand: Type.Optional(Type.String({ minLength: 1 })),
-    model: Type.Optional(Type.String({ minLength: 1 })),
-    androidVersion: Type.Optional(Type.String({ minLength: 1 })),
-    sdkInt: Type.Optional(Type.Integer({ minimum: 1 })),
+    brand: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+    model: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+    androidVersion: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+    sdkInt: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
   },
   { additionalProperties: false },
 );
 
 export const TargetGlassesSchema = Type.Object(
   {
-    bluetoothName: Type.Optional(Type.String({ minLength: 1 })),
-    bluetoothAddress: Type.Optional(Type.String({ minLength: 1 })),
+    bluetoothName: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+    bluetoothAddress: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
   },
   { additionalProperties: false },
 );
 
 export const RelayConfigSchema = Type.Object(
   {
-    baseUrl: Type.Optional(Type.String({ minLength: 1 })),
+    baseUrl: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
   },
   { additionalProperties: false },
 );
@@ -62,13 +62,13 @@ export const RelayHelloPayloadSchema = Type.Object(
   {
     authToken: Type.String({ minLength: 1 }),
     appVersion: Type.String({ minLength: 1 }),
-    appBuild: Type.Optional(Type.String({ minLength: 1 })),
+    appBuild: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
     phoneInfo: PhoneInfoSchema,
     setupState: SetupStateSchema,
     runtimeState: RuntimeStateSchema,
     capabilities: RelayHelloCapabilitiesSchema,
-    targetGlasses: Type.Optional(TargetGlassesSchema),
-    relayConfig: Type.Optional(RelayConfigSchema),
+    targetGlasses: Type.Optional(Type.Union([TargetGlassesSchema, Type.Null()])),
+    relayConfig: Type.Optional(Type.Union([RelayConfigSchema, Type.Null()])),
   },
   { additionalProperties: false },
 );
