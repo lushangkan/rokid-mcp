@@ -108,6 +108,25 @@ describe("relay app", () => {
     );
   });
 
+  test("websocket upgrade path is not rejected by HTTP bearer middleware", async () => {
+    const app = createApp({
+      env: TEST_ENV,
+      manager: new DeviceSessionManager({ heartbeatTimeoutMs: 50, cleanupIntervalMs: 10 }),
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/ws/device", {
+        headers: {
+          upgrade: "websocket",
+          "sec-websocket-key": "dGVzdA==",
+          "sec-websocket-version": "13",
+        },
+      }),
+    );
+
+    expect(response.status).not.toBe(401);
+  });
+
   test("createApp exposes only the cutover status and command routes", () => {
     const app = createApp({
       env: TEST_ENV,
