@@ -17,14 +17,14 @@ describe("relay-server source import paths", () => {
   test("source files do not use local relative .js import extensions", async () => {
     const glob = new Glob("**/*.ts");
     const offenderLines: string[] = [];
+    const sourceRoot = import.meta.dir;
 
-    for await (const relativePath of glob.scan({ cwd: new URL("./", import.meta.url).pathname })) {
+    for await (const relativePath of glob.scan({ cwd: sourceRoot })) {
       if (relativePath === "import-paths.test.ts") {
         continue;
       }
 
-      const absolutePath = new URL(relativePath, import.meta.url);
-      const content = await Bun.file(absolutePath).text();
+      const content = await Bun.file(`${sourceRoot}/${relativePath}`).text();
       const lines = content.split("\n");
 
       lines.forEach((line, index) => {

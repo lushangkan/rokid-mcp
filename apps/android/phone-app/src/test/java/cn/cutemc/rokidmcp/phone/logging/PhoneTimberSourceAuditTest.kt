@@ -33,6 +33,17 @@ class PhoneTimberSourceAuditTest {
 
 private fun resolveSourceRoot(vararg relativeSegments: String): Path {
     val cwd = Paths.get("").toAbsolutePath().normalize()
+    val moduleRelativeSegments = relativeSegments.drop(1)
+    val moduleRelativePath = if (moduleRelativeSegments.isEmpty()) {
+        Paths.get("")
+    } else {
+        Paths.get(moduleRelativeSegments.first(), *moduleRelativeSegments.drop(1).toTypedArray())
+    }
+    val moduleRelative = cwd.resolve(moduleRelativePath)
+    if (Files.exists(moduleRelative)) {
+        return moduleRelative
+    }
+
     val direct = cwd.resolve(Paths.get(relativeSegments.first(), *relativeSegments.drop(1).toTypedArray()))
     if (Files.exists(direct)) {
         return direct
