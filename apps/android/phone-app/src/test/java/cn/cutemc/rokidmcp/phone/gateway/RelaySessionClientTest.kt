@@ -157,6 +157,37 @@ class RelaySessionClientTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `websocket text callback dispatches to relay message handler without recursion`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var callbacks: RelayWebSocketCallbacks? = null
+        val client = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_172_000L),
+            config = PhoneGatewayConfig(
+                deviceId = "abc12345",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                FakeRelayWebSocket()
+            },
+        )
+
+        client.connect()
+        val relayCallbacks = requireNotNull(callbacks)
+        relayCallbacks.onOpen()
+        runCurrent()
+        relayCallbacks.onTextMessage(validHelloAckJson())
+        runCurrent()
+
+        assertTrue(client.canSendStateUpdate())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `connect logs relay websocket failures while connection is active`() = runTest {
         val runtimeStore = PhoneRuntimeStore()
         var callbacks: RelayWebSocketCallbacks? = null
@@ -387,14 +418,15 @@ class RelaySessionClientTest {
                   "deviceId":"abc12345",
                   "sessionId":"ses_sensitive",
                   "requestId":"req_display_sensitive",
-                  "timestamp":1717172051,
-                  "payload":{
-                    "action":"display_text",
-                    "params":{
-                      "text":"Bearer Authorization authToken displayed text=do-not-log",
-                      "durationMs":3000
-                    }
-                  }
+                 "timestamp":1717172051,
+                 "payload":{
+                   "action":"display_text",
+                   "timeoutMs":30000,
+                   "params":{
+                     "text":"Bearer Authorization authToken displayed text=do-not-log",
+                     "durationMs":3000
+                   }
+                 }
                 }
                 """.trimIndent(),
             )
