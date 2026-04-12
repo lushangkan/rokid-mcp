@@ -36,6 +36,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -139,7 +140,64 @@ class RelaySessionClient(
         const val LOG_TAG = "relay-session"
     }
 
+    private data class IncomingRelayMessage(
+        val root: JsonObject,
+        val rawType: String?,
+        val messageType: RelayMessageType?,
+    )
+
+    /**
+     * Guards callback delivery for the most recent websocket connection so stale or duplicate
+     * terminal callbacks cannot mutate the current session.
+     */
+    private class ConnectionTracker {
+        private var nextConnectionId: Long = 0L
+        private var activeConnectionId: Long = 0L
+        private var handledTerminalConnectionId: Long? = null
+
+        @Synchronized
+        fun register(): Long {
+            nextConnectionId += 1
+            activeConnectionId = nextConnectionId
+            handledTerminalConnectionId = null
+            return activeConnectionId
+        }
+
+        @Synchronized
+        fun shouldHandle(connectionId: Long): Boolean {
+            return connectionId == activeConnectionId && handledTerminalConnectionId != connectionId
+        }
+
+        @Synchronized
+        fun claimTerminalCallback(connectionId: Long): Boolean {
+            if (connectionId != activeConnectionId || handledTerminalConnectionId == connectionId) {
+                return false
+            }
+
+            handledTerminalConnectionId = connectionId
+            return true
+        }
+
+        @Synchronized
+        fun markClosedByClient() {
+            if (activeConnectionId == 0L) {
+                return
+            }
+
+            handledTerminalConnectionId = activeConnectionId
+            activeConnectionId = 0L
+        }
+
+        @Synchronized
+        fun clear(connectionId: Long) {
+            if (activeConnectionId == connectionId || activeConnectionId == 0L) {
+                activeConnectionId = 0L
+            }
+        }
+    }
+
     private val internalEvents = MutableSharedFlow<RelaySessionEvent>(extraBufferCapacity = 32)
+    private val connectionTracker = ConnectionTracker()
 
     val events: Flow<RelaySessionEvent> = internalEvents
 
@@ -149,78 +207,100 @@ class RelaySessionClient(
     private var isManualDisconnect: Boolean = false
     private var heartbeatJob: Job? = null
     private var heartbeatSeq: Long = 0L
-    private var nextConnectionId: Long = 0L
-    private var activeConnectionId: Long = 0L
-    private var handledTerminalConnectionId: Long? = null
+
+    private val relayWebSocketUrl: String
+        get() = buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required"))
 
     suspend fun connect() {
         isManualDisconnect = false
         if (activeWebSocket == null) {
-            val relayUrl = buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required"))
-            val connectionId = registerConnection()
+            val relayUrl = relayWebSocketUrl
+            val connectionId = connectionTracker.register()
             Timber.tag(LOG_TAG).i("connecting relay websocket to %s", relayUrl.toSafeRelayUrlSummary())
             activeWebSocket = webSocketFactory.connect(
                 relayUrl,
-                object : RelayWebSocketCallbacks {
-                    override fun onOpen() {
-                        if (!shouldHandleActiveCallback(connectionId)) {
-                            return
-                        }
-                        Timber.tag(LOG_TAG).i("relay websocket opened")
-                        controllerScope.launch { onConnected() }
-                    }
-
-                    override fun onTextMessage(text: String) {
-                        if (!shouldHandleActiveCallback(connectionId)) {
-                            return
-                        }
-                        controllerScope.launch { onTextMessage(text) }
-                    }
-
-                    override fun onClosed(code: Int, reason: String) {
-                        if (!claimTerminalCallback(connectionId)) {
-                            return
-                        }
-                        val safeReason = reason.redactRelaySecrets()
-                        Timber.tag(LOG_TAG).w("relay websocket closed code=%d reason=%s", code, safeReason.ifBlank { "(empty)" })
-                        controllerScope.launch { onClosed(connectionId, code, safeReason) }
-                    }
-
-                    override fun onFailure(error: Throwable) {
-                        if (!claimTerminalCallback(connectionId)) {
-                            return
-                        }
-                        val safeError = error.redactRelaySecrets()
-                        Timber.tag(LOG_TAG).e(
-                            safeError,
-                            "relay websocket failure url=%s",
-                            relayUrl.toSafeRelayUrlSummary(),
-                        )
-                        controllerScope.launch { onFailure(connectionId, safeError) }
-                    }
-                },
+                createCallbacks(connectionId, relayUrl),
             )
         }
 
         if (webSocket != null) {
-            onConnected()
+            handleConnected()
         }
     }
 
     suspend fun disconnect(reason: String) {
         isManualDisconnect = true
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-        sessionId = null
-        markConnectionClosedByClient()
+        clearSessionState()
+        connectionTracker.markClosedByClient()
         activeWebSocket?.close(reason = reason)
-        activeWebSocket = null
-        internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
+        restoreConfiguredWebSocket()
+        emitUplinkState(PhoneUplinkState.OFFLINE)
     }
 
     suspend fun onConnected() {
+        handleConnected()
+    }
+
+    suspend fun onTextMessage(text: String) {
+        handleIncomingTextMessage(text)
+    }
+
+    suspend fun onClosed(code: Int, reason: String) {
+        handleClosed(code, reason.redactRelaySecrets())
+    }
+
+    suspend fun onFailure(error: Throwable) {
+        handleFailure(error.redactRelaySecrets())
+    }
+
+    private fun createCallbacks(connectionId: Long, relayUrl: String): RelayWebSocketCallbacks {
+        return object : RelayWebSocketCallbacks {
+            override fun onOpen() {
+                if (!connectionTracker.shouldHandle(connectionId)) {
+                    return
+                }
+
+                Timber.tag(LOG_TAG).i("relay websocket opened")
+                controllerScope.launch { handleConnected() }
+            }
+
+            override fun onTextMessage(text: String) {
+                if (!connectionTracker.shouldHandle(connectionId)) {
+                    return
+                }
+
+                controllerScope.launch { handleIncomingTextMessage(text) }
+            }
+
+            override fun onClosed(code: Int, reason: String) {
+                if (!connectionTracker.claimTerminalCallback(connectionId)) {
+                    return
+                }
+
+                val safeReason = reason.redactRelaySecrets()
+                Timber.tag(LOG_TAG).w("relay websocket closed code=%d reason=%s", code, safeReason.ifBlank { "(empty)" })
+                controllerScope.launch { handleClosed(connectionId, code, safeReason) }
+            }
+
+            override fun onFailure(error: Throwable) {
+                if (!connectionTracker.claimTerminalCallback(connectionId)) {
+                    return
+                }
+
+                val safeError = error.redactRelaySecrets()
+                Timber.tag(LOG_TAG).e(
+                    safeError,
+                    "relay websocket failure url=%s",
+                    relayUrl.toSafeRelayUrlSummary(),
+                )
+                controllerScope.launch { handleFailure(connectionId, safeError) }
+            }
+        }
+    }
+
+    private suspend fun handleConnected() {
         internalEvents.emit(RelaySessionEvent.Connected)
-        internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.CONNECTING))
+        emitUplinkState(PhoneUplinkState.CONNECTING)
 
         val snapshot = runtimeStore.snapshot.value
         Timber.tag(LOG_TAG).i(
@@ -228,193 +308,175 @@ class RelaySessionClient(
             config.deviceId,
             snapshot.setupState,
             snapshot.runtimeState,
-            buildRelayWebSocketUrl(config.relayBaseUrl ?: error("relayBaseUrl is required")).toSafeRelayUrlSummary(),
+            relayWebSocketUrl.toSafeRelayUrlSummary(),
         )
-        activeWebSocket?.sendText(
-            json.encodeToString(
-                RelayHelloMessage.serializer(),
-                RelayHelloMessage(
-                    version = RelayProtocolConstants.PROTOCOL_VERSION,
-                    deviceId = config.deviceId,
-                    timestamp = clock.nowMs(),
-                    payload = RelayHelloPayload(
-                        authToken = requireNotNull(config.authToken),
-                        appVersion = config.appVersion,
-                        phoneInfo = RelayPhoneInfo(),
-                        setupState = snapshot.setupState.toRelaySetupState(),
-                        runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
-                        capabilities = supportedActions,
-                    ),
+        sendEncodedMessage(
+            serializer = RelayHelloMessage.serializer(),
+            message = RelayHelloMessage(
+                version = RelayProtocolConstants.PROTOCOL_VERSION,
+                deviceId = config.deviceId,
+                timestamp = clock.nowMs(),
+                payload = RelayHelloPayload(
+                    authToken = requireNotNull(config.authToken),
+                    appVersion = config.appVersion,
+                    phoneInfo = RelayPhoneInfo(),
+                    setupState = snapshot.setupState.toRelaySetupState(),
+                    runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
+                    capabilities = supportedActions,
                 ),
             ),
         )
     }
 
-    suspend fun onTextMessage(text: String) {
-        val rawType = try {
-            text.toRelayRawMessageType(json)
-        } catch (error: SerializationException) {
-            Timber.tag(LOG_TAG).e(error, "failed to parse relay websocket message envelope")
-            return
-        }
+    private suspend fun handleIncomingTextMessage(text: String) {
+        val message = parseIncomingMessage(text) ?: return
 
-        val messageType = rawType?.toRelayMessageType()
-
-        when (messageType) {
-            RelayMessageType.HELLO_ACK -> {
-                val ackSessionId = try {
-                    json.parseToJsonElement(text)
-                        .jsonObject["payload"]
-                        ?.jsonObject
-                        ?.get("sessionId")
-                        ?.jsonPrimitive
-                        ?.contentOrNull
-                } catch (error: Exception) {
-                    Timber.tag(LOG_TAG).e(error, "failed to extract relay sessionId from HELLO_ACK")
-                    null
-                }
-                if (ackSessionId.isNullOrBlank()) {
-                    Timber.tag(LOG_TAG).e("relay HELLO_ACK failed: missing sessionId")
-                    heartbeatJob?.cancel()
-                    heartbeatJob = null
-                    sessionId = null
-                    internalEvents.emit(RelaySessionEvent.Failed("relay hello_ack missing sessionId"))
-                    internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
-                    return
-                }
-
-                val ack = try {
-                    json.decodeFromString(RelayHelloAckMessage.serializer(), text)
-                } catch (error: SerializationException) {
-                    Timber.tag(LOG_TAG).e(error, "relay HELLO_ACK failed: invalid payload")
-                    heartbeatJob?.cancel()
-                    heartbeatJob = null
-                    sessionId = null
-                    internalEvents.emit(RelaySessionEvent.Failed(error.message ?: "relay hello_ack parse failure"))
-                    internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
-                    return
-                }
-
-                sessionId = ackSessionId
-                heartbeatIntervalMs = ack.payload.heartbeatIntervalMs
-                Timber.tag(LOG_TAG).i(
-                    "relay HELLO_ACK accepted sessionId=%s heartbeatIntervalMs=%d",
-                    ackSessionId,
-                    heartbeatIntervalMs,
-                )
-                internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.ONLINE))
-                startHeartbeatLoop()
-            }
-
-            RelayMessageType.COMMAND -> {
-                val command = json.decodeFromString(CommandDispatchMessage.serializer(), text)
-                Timber.tag(LOG_TAG).i(
-                    "received relay command requestId=%s action=%s sessionId=%s",
-                    command.requestId,
-                    command.payload.action,
-                    command.sessionId,
-                )
-                internalEvents.emit(
-                    RelaySessionEvent.CommandDispatched(
-                        command,
-                    ),
-                )
-            }
-
-            RelayMessageType.COMMAND_CANCEL -> {
-                val commandCancel = json.decodeFromString(CommandCancelMessage.serializer(), text)
-                Timber.tag(LOG_TAG).i(
-                    "received relay command_cancel requestId=%s action=%s sessionId=%s",
-                    commandCancel.requestId,
-                    commandCancel.payload.action,
-                    commandCancel.sessionId,
-                )
-                internalEvents.emit(
-                    RelaySessionEvent.CommandCancelled(
-                        commandCancel,
-                    ),
-                )
-            }
-
+        when (message.messageType) {
+            RelayMessageType.HELLO_ACK -> handleHelloAck(message)
+            RelayMessageType.COMMAND -> handleCommand(message)
+            RelayMessageType.COMMAND_CANCEL -> handleCommandCancel(message)
             else -> Timber.tag(LOG_TAG).w(
                 "received relay message with unknown type=%s",
-                rawType ?: "(missing)",
+                message.rawType ?: "(missing)",
             )
         }
     }
 
-    suspend fun onClosed(code: Int, reason: String) {
-        val safeReason = reason.redactRelaySecrets()
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-        sessionId = null
-        val wasActiveSocket = activeWebSocket != null
-        activeWebSocket = webSocket
+    private suspend fun handleHelloAck(message: IncomingRelayMessage) {
+        val ack = try {
+            json.decodeFromJsonElement(RelayHelloAckMessage.serializer(), message.root)
+        } catch (error: SerializationException) {
+            if (message.root.payloadSessionIdOrNull().isNullOrBlank()) {
+                Timber.tag(LOG_TAG).e("relay HELLO_ACK failed: missing sessionId")
+                failHandshake("relay hello_ack missing sessionId")
+                return
+            }
 
-        if (!isManualDisconnect && wasActiveSocket) {
-            internalEvents.emit(RelaySessionEvent.ConnectionClosed(code, safeReason))
-        }
-        internalEvents.emit(RelaySessionEvent.UplinkStateChanged(PhoneUplinkState.OFFLINE))
-    }
-
-    suspend fun onFailure(error: Throwable) {
-        val safeError = error.redactRelaySecrets()
-        Timber.tag(LOG_TAG).e(safeError, "relay websocket failure")
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-        sessionId = null
-        activeWebSocket = webSocket
-        internalEvents.emit(RelaySessionEvent.Failed(safeError.message ?: "relay websocket failure"))
-    }
-
-    private suspend fun onClosed(connectionId: Long, code: Int, reason: String) {
-        clearConnectionTracking(connectionId)
-        onClosed(code, reason)
-    }
-
-    private suspend fun onFailure(connectionId: Long, error: Throwable) {
-        clearConnectionTracking(connectionId)
-        onFailure(error)
-    }
-
-    @Synchronized
-    private fun registerConnection(): Long {
-        nextConnectionId += 1
-        activeConnectionId = nextConnectionId
-        handledTerminalConnectionId = null
-        return activeConnectionId
-    }
-
-    @Synchronized
-    private fun shouldHandleActiveCallback(connectionId: Long): Boolean {
-        return connectionId == activeConnectionId && handledTerminalConnectionId != connectionId
-    }
-
-    @Synchronized
-    private fun claimTerminalCallback(connectionId: Long): Boolean {
-        if (connectionId != activeConnectionId || handledTerminalConnectionId == connectionId) {
-            return false
-        }
-
-        handledTerminalConnectionId = connectionId
-        return true
-    }
-
-    @Synchronized
-    private fun markConnectionClosedByClient() {
-        if (activeConnectionId == 0L) {
+            Timber.tag(LOG_TAG).e(error, "relay HELLO_ACK failed: invalid payload")
+            failHandshake(error.message ?: "relay hello_ack parse failure")
             return
         }
 
-        handledTerminalConnectionId = activeConnectionId
-        activeConnectionId = 0L
+        sessionId = ack.payload.sessionId
+        heartbeatIntervalMs = ack.payload.heartbeatIntervalMs
+        Timber.tag(LOG_TAG).i(
+            "relay HELLO_ACK accepted sessionId=%s heartbeatIntervalMs=%d",
+            ack.payload.sessionId,
+            heartbeatIntervalMs,
+        )
+        emitUplinkState(PhoneUplinkState.ONLINE)
+        startHeartbeatLoop()
     }
 
-    @Synchronized
-    private fun clearConnectionTracking(connectionId: Long) {
-        if (activeConnectionId == connectionId || activeConnectionId == 0L) {
-            activeConnectionId = 0L
+    private suspend fun handleCommand(message: IncomingRelayMessage) {
+        val command = decodeIncomingMessage(
+            serializer = CommandDispatchMessage.serializer(),
+            message = message,
+            errorMessage = "failed to decode relay command payload",
+        ) ?: return
+
+        Timber.tag(LOG_TAG).i(
+            "received relay command requestId=%s action=%s sessionId=%s",
+            command.requestId,
+            command.payload.action,
+            command.sessionId,
+        )
+        internalEvents.emit(RelaySessionEvent.CommandDispatched(command))
+    }
+
+    private suspend fun handleCommandCancel(message: IncomingRelayMessage) {
+        val commandCancel = decodeIncomingMessage(
+            serializer = CommandCancelMessage.serializer(),
+            message = message,
+            errorMessage = "failed to decode relay command_cancel payload",
+        ) ?: return
+
+        Timber.tag(LOG_TAG).i(
+            "received relay command_cancel requestId=%s action=%s sessionId=%s",
+            commandCancel.requestId,
+            commandCancel.payload.action,
+            commandCancel.sessionId,
+        )
+        internalEvents.emit(RelaySessionEvent.CommandCancelled(commandCancel))
+    }
+
+    private suspend fun handleClosed(code: Int, reason: String) {
+        clearSessionState()
+        if (!isManualDisconnect) {
+            internalEvents.emit(RelaySessionEvent.ConnectionClosed(code, reason))
         }
+        restoreConfiguredWebSocket()
+        emitUplinkState(PhoneUplinkState.OFFLINE)
+    }
+
+    private suspend fun handleFailure(error: Throwable) {
+        Timber.tag(LOG_TAG).e(error, "relay websocket failure")
+        clearSessionState()
+        restoreConfiguredWebSocket()
+        internalEvents.emit(RelaySessionEvent.Failed(error.message ?: "relay websocket failure"))
+    }
+
+    private suspend fun handleClosed(connectionId: Long, code: Int, reason: String) {
+        connectionTracker.clear(connectionId)
+        handleClosed(code, reason)
+    }
+
+    private suspend fun handleFailure(connectionId: Long, error: Throwable) {
+        connectionTracker.clear(connectionId)
+        handleFailure(error)
+    }
+
+    private fun parseIncomingMessage(text: String): IncomingRelayMessage? {
+        val root = try {
+            json.parseToJsonElement(text).jsonObject
+        } catch (error: SerializationException) {
+            Timber.tag(LOG_TAG).e(error, "failed to parse relay websocket message envelope")
+            return null
+        }
+
+        val rawType = root["type"]?.jsonPrimitive?.contentOrNull
+        return IncomingRelayMessage(
+            root = root,
+            rawType = rawType,
+            messageType = rawType?.toRelayMessageType(),
+        )
+    }
+
+    private fun <T> decodeIncomingMessage(
+        serializer: KSerializer<T>,
+        message: IncomingRelayMessage,
+        errorMessage: String,
+    ): T? {
+        return try {
+            json.decodeFromJsonElement(serializer, message.root)
+        } catch (error: SerializationException) {
+            Timber.tag(LOG_TAG).e(error, errorMessage)
+            null
+        }
+    }
+
+    private suspend fun failHandshake(message: String) {
+        clearSessionState()
+        internalEvents.emit(RelaySessionEvent.Failed(message))
+        emitUplinkState(PhoneUplinkState.OFFLINE)
+    }
+
+    private fun clearSessionState() {
+        stopHeartbeat()
+        sessionId = null
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+    }
+
+    private fun restoreConfiguredWebSocket() {
+        activeWebSocket = webSocket
+    }
+
+    private suspend fun emitUplinkState(state: PhoneUplinkState) {
+        internalEvents.emit(RelaySessionEvent.UplinkStateChanged(state))
     }
 
     fun canSendStateUpdate(): Boolean = sessionId != null
@@ -429,20 +491,18 @@ class RelaySessionClient(
             snapshot.runtimeState,
             snapshot.activeCommandRequestId ?: "none",
         )
-        activeWebSocket?.sendText(
-            json.encodeToString(
-                RelayHeartbeatMessage.serializer(),
-                RelayHeartbeatMessage(
-                    version = RelayProtocolConstants.PROTOCOL_VERSION,
-                    deviceId = config.deviceId,
-                    sessionId = currentSessionId,
-                    timestamp = clock.nowMs(),
-                    payload = RelayHeartbeatPayload(
-                        seq = heartbeatSeq++,
-                        runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
-                        pendingCommandCount = 0,
-                        activeCommandRequestId = snapshot.activeCommandRequestId,
-                    ),
+        sendEncodedMessage(
+            serializer = RelayHeartbeatMessage.serializer(),
+            message = RelayHeartbeatMessage(
+                version = RelayProtocolConstants.PROTOCOL_VERSION,
+                deviceId = config.deviceId,
+                sessionId = currentSessionId,
+                timestamp = clock.nowMs(),
+                payload = RelayHeartbeatPayload(
+                    seq = heartbeatSeq++,
+                    runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
+                    pendingCommandCount = 0,
+                    activeCommandRequestId = snapshot.activeCommandRequestId,
                 ),
             ),
         )
@@ -457,21 +517,19 @@ class RelaySessionClient(
             snapshot.runtimeState,
             snapshot.activeCommandRequestId ?: "none",
         )
-        activeWebSocket?.sendText(
-            json.encodeToString(
-                RelayPhoneStateUpdateMessage.serializer(),
-                RelayPhoneStateUpdateMessage(
-                    version = RelayProtocolConstants.PROTOCOL_VERSION,
-                    deviceId = config.deviceId,
-                    sessionId = currentSessionId,
-                    timestamp = clock.nowMs(),
-                    payload = RelayPhoneStateUpdatePayload(
-                        setupState = snapshot.setupState.toRelaySetupState(),
-                        runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
-                        lastErrorCode = snapshot.lastErrorCode,
-                        lastErrorMessage = snapshot.lastErrorMessage,
-                        activeCommandRequestId = snapshot.activeCommandRequestId,
-                    ),
+        sendEncodedMessage(
+            serializer = RelayPhoneStateUpdateMessage.serializer(),
+            message = RelayPhoneStateUpdateMessage(
+                version = RelayProtocolConstants.PROTOCOL_VERSION,
+                deviceId = config.deviceId,
+                sessionId = currentSessionId,
+                timestamp = clock.nowMs(),
+                payload = RelayPhoneStateUpdatePayload(
+                    setupState = snapshot.setupState.toRelaySetupState(),
+                    runtimeState = snapshot.runtimeState.toRelayRuntimeState(),
+                    lastErrorCode = snapshot.lastErrorCode,
+                    lastErrorMessage = snapshot.lastErrorMessage,
+                    activeCommandRequestId = snapshot.activeCommandRequestId,
                 ),
             ),
         )
@@ -591,12 +649,16 @@ class RelaySessionClient(
         ).toString()
     }
 
+    private fun <T> sendEncodedMessage(serializer: KSerializer<T>, message: T) {
+        activeWebSocket?.sendText(json.encodeToString(serializer, message))
+    }
+
     private fun <T> sendSessionMessage(serializer: KSerializer<T>, message: T) {
         if (sessionId == null) {
             return
         }
 
-        activeWebSocket?.sendText(json.encodeToString(serializer, message))
+        sendEncodedMessage(serializer, message)
     }
 
     private fun PhoneSetupState.toRelaySetupState(): SetupState {
@@ -618,11 +680,12 @@ class RelaySessionClient(
 
 }
 
-private fun String.toRelayRawMessageType(json: Json): String? {
-    return json.parseToJsonElement(this)
-        .jsonObject["type"]
+private fun JsonObject.payloadSessionIdOrNull(): String? {
+    return this["payload"]
+        ?.jsonObject
+        ?.get("sessionId")
         ?.jsonPrimitive
-        ?.content
+        ?.contentOrNull
 }
 
 private fun String.toRelayMessageType(): RelayMessageType? {
