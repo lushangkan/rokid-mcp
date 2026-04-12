@@ -37,6 +37,34 @@ describe("relay ws schema", () => {
     expect(Value.Check(RelayDeviceInboundMessageSchema, message)).toBe(true);
   });
 
+  test("accepts hello message with explicit nulls from Android serializer", () => {
+    const message = {
+      version: "1.0",
+      type: "hello",
+      deviceId: "phone-fd296361",
+      timestamp: 1775987393523,
+      payload: {
+        authToken: "JTEWnRMFhS1YppoV9+hAiQ==",
+        appVersion: "1.0",
+        appBuild: null,
+        phoneInfo: {
+          brand: null,
+          model: null,
+          androidVersion: null,
+          sdkInt: null,
+        },
+        setupState: "INITIALIZED",
+        runtimeState: "CONNECTING",
+        capabilities: ["display_text", "capture_photo"],
+        targetGlasses: null,
+        relayConfig: null,
+      },
+    };
+
+    expect(Value.Check(RelayHelloMessageSchema, message)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, message)).toBe(true);
+  });
+
   test("accepts heartbeat message", () => {
     const message = {
       version: "1.0",
