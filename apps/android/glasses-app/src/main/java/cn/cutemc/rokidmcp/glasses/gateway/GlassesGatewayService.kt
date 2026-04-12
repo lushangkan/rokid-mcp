@@ -10,7 +10,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import cn.cutemc.rokidmcp.glasses.GlassesApp
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.Camera2CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraXCameraAdapter
+import cn.cutemc.rokidmcp.glasses.camera.FallbackCameraAdapter
 import cn.cutemc.rokidmcp.glasses.checksum.ChecksumCalculator
 import cn.cutemc.rokidmcp.glasses.executor.CapturePhotoExecutor
 import cn.cutemc.rokidmcp.glasses.executor.DisplayTextExecutor
@@ -79,9 +81,14 @@ class GlassesGatewayService : LifecycleService() {
         val composition = createActiveGlassesGatewayComposition(
             app = application as GlassesApp,
             sessionScope = lifecycleScope,
-            cameraAdapter = CameraXCameraAdapter(
-                context = applicationContext,
-                lifecycleOwner = this,
+            cameraAdapter = FallbackCameraAdapter(
+                primary = CameraXCameraAdapter(
+                    context = applicationContext,
+                    lifecycleOwner = this,
+                ),
+                fallback = Camera2CameraAdapter(
+                    context = applicationContext,
+                ),
             ),
         )
 

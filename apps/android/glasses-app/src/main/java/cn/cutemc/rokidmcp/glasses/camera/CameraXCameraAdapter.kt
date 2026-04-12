@@ -3,7 +3,6 @@ package cn.cutemc.rokidmcp.glasses.camera
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import androidx.camera.core.CameraInfoUnavailableException
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -65,7 +64,7 @@ class CameraXCameraAdapter(
             bindImageCapture(cameraProvider, imageCapture)
             imageCapture.captureToFile(outputFile, mainExecutor)
             val bytes = readCaptureBytes(outputFile)
-            val (width, height) = decodeJpegMetadata(bytes)
+            val (width, height) = decodeJpegDimensions(bytes)
 
             return CameraCapture(
                 bytes = bytes,
@@ -151,17 +150,24 @@ class CameraXCameraAdapter(
             CameraSelector.DEFAULT_FRONT_CAMERA,
         )
 
-        return preferredSelectors.firstOrNull { selector ->
+        val preferredSelector = preferredSelectors.firstOrNull { selector ->
             try {
                 cameraProvider.hasCamera(selector)
             } catch (error: CameraInfoUnavailableException) {
                 Timber.tag("camera").w(error, "failed to inspect camera availability")
                 false
             }
-        } ?: throw CameraCaptureException(
-            code = LocalProtocolErrorCodes.CAMERA_UNAVAILABLE,
-            message = "no camera is available for capture_photo",
+        }
+        if (preferredSelector != null) {
+            return preferredSelector
+        }
+
+        Timber.tag("camera").w(
+            "preferred front/back selectors are unavailable; falling back to the first CameraX camera",
         )
+        return CameraSelector.Builder()
+            .addCameraFilter { cameraInfos -> cameraInfos.take(1) }
+            .build()
     }
 
     private suspend fun ImageCapture.captureToFile(file: File, executor: Executor) = suspendCancellableCoroutine<Unit> { continuation ->
@@ -186,19 +192,6 @@ class CameraXCameraAdapter(
                 }
             },
         )
-    }
-
-    private fun decodeJpegMetadata(bytes: ByteArray): Pair<Int, Int> {
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        val width = options.outWidth
-        val height = options.outHeight
-        require(width > 0 && height > 0) {
-            "camera returned a jpeg payload without valid dimensions"
-        }
-        return width to height
     }
 
     private fun mapUnavailable(error: Throwable, fallbackMessage: String): CameraCaptureException {

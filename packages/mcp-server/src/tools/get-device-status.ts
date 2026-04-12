@@ -1,5 +1,5 @@
 import { Value } from "@sinclair/typebox/value";
-import { GetDeviceStatusParamsSchema, type GetDeviceStatusParams } from "../../../protocol/src/index.js";
+import { GetDeviceStatusParamsSchema, type GetDeviceStatusParams } from "@rokid-mcp/protocol";
 import { z } from "zod";
 import { RelayRequestError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";

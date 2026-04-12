@@ -334,6 +334,27 @@ describe("relay ws schema", () => {
     expect(Value.Check(RelayDeviceInboundMessageSchema, error)).toBe(true);
   });
 
+  test("accepts command_status with explicit null detail fields from Android serializer", () => {
+    const status = {
+      version: "1.0",
+      type: "command_status",
+      deviceId: "phone-fd296361",
+      requestId: "req_2b12b01c_35ae_48d2_a939_cc84d7844df5",
+      sessionId: "ses_cac2b1f7_e1bf_4c4f_b58d_68938496a291",
+      timestamp: 1775993872516,
+      payload: {
+        action: "display_text",
+        status: "forwarding_to_glasses",
+        statusAt: 1775993872501,
+        detailCode: null,
+        detailMessage: null,
+      },
+    };
+
+    expect(Value.Check(CommandStatusMessageSchema, status)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, status)).toBe(true);
+  });
+
   test("accepts relay command_cancel message", () => {
     const message = {
       version: "1.0",

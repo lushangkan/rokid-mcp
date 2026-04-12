@@ -282,8 +282,8 @@ export const CommandStatusBasePayloadSchema = Type.Object(
   {
     action: CommandActionSchema,
     statusAt: TimestampSchema,
-    detailCode: Type.Optional(Type.String({ minLength: 1 })),
-    detailMessage: Type.Optional(Type.String({ minLength: 1 })),
+    detailCode: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+    detailMessage: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
   },
   { additionalProperties: false },
 );
