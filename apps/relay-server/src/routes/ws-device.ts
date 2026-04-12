@@ -35,6 +35,8 @@ type DeviceSocketLike = {
   close: (code?: number, reason?: string) => void;
 };
 
+type InboundWsRaw = unknown;
+
 type DeviceWsHandlersOptions = {
   manager: DeviceSessionManager;
   commandService: CommandService;
@@ -63,7 +65,7 @@ type ActiveSocketRecord = {
 
 type DeviceWsHandlers = {
   open: (ws: DeviceSocketLike) => void;
-  message: (ws: DeviceSocketLike, raw: string | Buffer) => void;
+  message: (ws: DeviceSocketLike, raw: InboundWsRaw) => void;
   close: (ws: DeviceSocketLike) => void;
 };
 
@@ -121,18 +123,100 @@ function createHelloAckMessage(
 
 type ParsedInboundMessage =
   | { ok: true; message: RelayDeviceInboundMessage }
-  | { ok: false; closeCode: number };
+  | { ok: false; closeCode: number; debugContext?: LogContext };
 
-function parseInboundMessage(raw: string | Buffer): ParsedInboundMessage {
-  if (typeof raw !== "string") {
-    raw = raw.toString();
+function describeInboundRaw(raw: InboundWsRaw): LogContext {
+  if (typeof raw === "string") {
+    return {
+      inboundRuntimeType: "string",
+      inboundLength: raw.length,
+    };
+  }
+
+  if (Buffer.isBuffer(raw)) {
+    return {
+      inboundRuntimeType: "Buffer",
+      inboundLength: raw.byteLength,
+    };
+  }
+
+  if (raw instanceof ArrayBuffer) {
+    return {
+      inboundRuntimeType: "ArrayBuffer",
+      inboundLength: raw.byteLength,
+    };
+  }
+
+  if (ArrayBuffer.isView(raw)) {
+    return {
+      inboundRuntimeType: raw.constructor.name,
+      inboundLength: raw.byteLength,
+    };
+  }
+
+  if (raw !== null && typeof raw === "object") {
+    return {
+      inboundRuntimeType: raw.constructor?.name ?? "object",
+      inboundKeys: Object.keys(raw).slice(0, 10),
+    };
+  }
+
+  return {
+    inboundRuntimeType: typeof raw,
+  };
+}
+
+function normalizeInboundMessage(raw: InboundWsRaw): string | object | null {
+  if (typeof raw === "string") {
+    return raw;
+  }
+
+  if (Buffer.isBuffer(raw)) {
+    return raw.toString("utf8");
+  }
+
+  if (raw instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(raw));
+  }
+
+  if (ArrayBuffer.isView(raw)) {
+    return new TextDecoder().decode(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
+  }
+
+  if (raw !== null && typeof raw === "object") {
+    return raw;
+  }
+
+  return null;
+}
+
+function parseInboundMessage(raw: InboundWsRaw): ParsedInboundMessage {
+  const normalized = normalizeInboundMessage(raw);
+  if (normalized === null) {
+    return {
+      ok: false,
+      closeCode: CLOSE_UNSUPPORTED_DATA,
+      debugContext: describeInboundRaw(raw),
+    };
   }
 
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { ok: false, closeCode: CLOSE_UNSUPPORTED_DATA };
+  if (typeof normalized === "string") {
+    try {
+      parsed = JSON.parse(normalized);
+    } catch {
+      return {
+        ok: false,
+        closeCode: CLOSE_UNSUPPORTED_DATA,
+        debugContext: {
+          ...describeInboundRaw(raw),
+          normalizedRuntimeType: "string",
+          normalizedLength: normalized.length,
+        },
+      };
+    }
+  } else {
+    parsed = normalized;
   }
 
   if (!Value.Check(RelayDeviceInboundMessageSchema, parsed)) {
@@ -423,7 +507,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
       });
     },
 
-    message(ws: DeviceSocketLike, raw: string | Buffer) {
+    message(ws: DeviceSocketLike, raw: InboundWsRaw) {
       ws.data.socketId ??= createSocketId();
 
       const parsed = parseInboundMessage(raw);
@@ -431,6 +515,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
         logger.error("device websocket message rejected", {
           socketId: ws.data.socketId,
           closeCode: parsed.closeCode,
+          ...parsed.debugContext,
         });
         closeSocket(ws, parsed.closeCode);
         return;
@@ -636,7 +721,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
       handlers.open(ws as unknown as DeviceSocketLike);
     },
     message(ws, message) {
-      handlers.message(ws as unknown as DeviceSocketLike, message as string | Buffer);
+      handlers.message(ws as unknown as DeviceSocketLike, message as InboundWsRaw);
     },
     close(ws) {
       handlers.close(ws as unknown as DeviceSocketLike);

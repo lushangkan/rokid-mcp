@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { PROTOCOL_VERSION } from "@rokid-mcp/protocol";
+import {PROTOCOL_VERSION, RelayHelloMessageSchema} from "@rokid-mcp/protocol";
 
 import { CommandService } from "../modules/command/command-service.ts";
 import { DefaultCommandIdGenerator } from "../modules/command/id-generator.ts";
 import { DeviceSessionManager } from "../modules/device/device-session-manager.ts";
 import { createHttpCommandsRoutes } from "./http-commands.ts";
 import { buildDeviceWsHandlers, createDeviceWsController } from "./ws-device.ts";
+import {Value} from "@sinclair/typebox/value";
 
 type FakeSocket = {
   data: {
@@ -129,6 +130,10 @@ function helloMessage(deviceId = "device-a", authToken = "token-123") {
       capabilities: ["display_text"],
     },
   });
+}
+
+function helloMessageBytes(deviceId = "device-a", authToken = "token-123") {
+  return new TextEncoder().encode(helloMessage(deviceId, authToken));
 }
 
 function heartbeatMessage(args: {
@@ -467,6 +472,59 @@ describe("device websocket handlers", () => {
     expect(socket.data).not.toHaveProperty("authToken");
   });
 
+  test("typed array hello payload authenticates successfully", () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager);
+    const socket = createSocket();
+
+    handlers.open(socket);
+    handlers.message(socket, helloMessageBytes("device-a"));
+
+    const ack = socket.sent[0] as { type: string; payload: { sessionId: string } };
+    const status = manager.getCurrentDeviceStatus("device-a");
+
+    expect(socket.closeCalls).toEqual([]);
+    expect(ack.type).toBe("hello_ack");
+    expect(status.device.sessionState).toBe("ONLINE");
+    expect(status.device.sessionId).toBe(ack.payload.sessionId);
+  });
+
+  test("array buffer hello payload authenticates successfully", () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager);
+    const socket = createSocket();
+    const bytes = helloMessageBytes("device-a");
+    const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+    handlers.open(socket);
+    handlers.message(socket, arrayBuffer);
+
+    const ack = socket.sent[0] as { type: string; payload: { sessionId: string } };
+    const status = manager.getCurrentDeviceStatus("device-a");
+
+    expect(socket.closeCalls).toEqual([]);
+    expect(ack.type).toBe("hello_ack");
+    expect(status.device.sessionState).toBe("ONLINE");
+    expect(status.device.sessionId).toBe(ack.payload.sessionId);
+  });
+
+  test("already parsed hello payload authenticates successfully", () => {
+    const manager = createManager();
+    const handlers = createHandlers(manager);
+    const socket = createSocket();
+
+    handlers.open(socket);
+    handlers.message(socket, JSON.parse(helloMessage("device-a")));
+
+    const ack = socket.sent[0] as { type: string; payload: { sessionId: string } };
+    const status = manager.getCurrentDeviceStatus("device-a");
+
+    expect(socket.closeCalls).toEqual([]);
+    expect(ack.type).toBe("hello_ack");
+    expect(status.device.sessionState).toBe("ONLINE");
+    expect(status.device.sessionId).toBe(ack.payload.sessionId);
+  });
+
   test("pre-hello non-hello messages close connection", () => {
     const manager = createManager();
     const handlers = createHandlers(manager);
@@ -746,4 +804,10 @@ describe("device websocket handlers", () => {
     expect(newStatus.device.runtimeState).toBe("READY");
     expect(newStatus.device.lastErrorCode).toBeNull();
   });
+
+  test("Value check hello message from phone", () => {
+    const inbound = JSON.parse("{\"version\":\"1.0\",\"type\":\"hello\",\"deviceId\":\"phone-fd296361\",\"timestamp\":1775987393523,\"payload\":{\"authToken\":\"JTEWnRMFhS1YppoV9+hAiQ==\",\"appVersion\":\"1.0\",\"appBuild\":null,\"phoneInfo\":{\"brand\":null,\"model\":null,\"androidVersion\":null,\"sdkInt\":null},\"setupState\":\"INITIALIZED\",\"runtimeState\":\"CONNECTING\",\"capabilities\":[\"display_text\",\"capture_photo\"],\"targetGlasses\":null,\"relayConfig\":null}}")
+
+    expect(Value.Check(RelayHelloMessageSchema, inbound)).toBe(true);
+  })
 });
