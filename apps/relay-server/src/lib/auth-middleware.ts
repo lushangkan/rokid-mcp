@@ -27,6 +27,8 @@ const RELAY_HTTP_AUTH_MATCHERS = RELAY_HTTP_AUTH_ROUTE_MATRIX.map((route) => ({
   pattern: createPathPattern(route.path),
 }));
 
+const RELAY_DEVICE_WS_PATH = "/ws/device";
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -53,6 +55,13 @@ function resolveHttpAuthPolicy(request: Request): HttpAuthPolicy {
   return matchedRoute?.policy ?? "bearer";
 }
 
+export function isRelayDeviceWebSocketUpgradeRequest(request: Request): boolean {
+  const pathname = new URL(request.url).pathname;
+  const upgradeHeader = request.headers.get("upgrade")?.toLowerCase();
+
+  return pathname === RELAY_DEVICE_WS_PATH && upgradeHeader === "websocket";
+}
+
 function createUnauthorizedResponse(): ErrorResponse {
   return {
     ok: false,
@@ -69,6 +78,10 @@ export function createRelayHttpAuthMiddleware(options: Pick<RelayEnv, "httpAuthT
   return new Elysia({ name: "relay-http-auth-middleware" }).onBeforeHandle(
     { as: "global" },
     ({ request, set }) => {
+      if (isRelayDeviceWebSocketUpgradeRequest(request)) {
+        return;
+      }
+
       const policy = resolveHttpAuthPolicy(request);
 
       if (policy !== "bearer") {

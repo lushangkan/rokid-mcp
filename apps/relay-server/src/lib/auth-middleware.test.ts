@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 
-import { createRelayHttpAuthMiddleware } from "./auth-middleware.ts";
+import {
+  createRelayHttpAuthMiddleware,
+  isRelayDeviceWebSocketUpgradeRequest,
+} from "./auth-middleware.ts";
 
 const TEST_HTTP_AUTH_TOKENS = ["mcp-token-1"];
 
@@ -50,6 +53,29 @@ function createAppWithAuthGate() {
 }
 
 describe("relay HTTP auth middleware", () => {
+  test("detects only real device websocket upgrade requests for auth bypass", () => {
+    expect(
+      isRelayDeviceWebSocketUpgradeRequest(
+        createRequest("/ws/device", {
+          headers: {
+            upgrade: "websocket",
+          },
+        }),
+      ),
+    ).toBe(true);
+
+    expect(isRelayDeviceWebSocketUpgradeRequest(createRequest("/ws/device"))).toBe(false);
+    expect(
+      isRelayDeviceWebSocketUpgradeRequest(
+        createRequest("/api/v1/devices/device-a/status", {
+          headers: {
+            upgrade: "websocket",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
   test("allows GET /health without bearer auth", async () => {
     const { app, calls } = createAppWithAuthGate();
 
