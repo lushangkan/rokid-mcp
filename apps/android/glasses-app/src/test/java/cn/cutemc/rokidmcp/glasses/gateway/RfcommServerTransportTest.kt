@@ -458,6 +458,101 @@ class RfcommServerTransportTest {
         assertTrue(logs.none { entry -> entry.message.contains("RFCOMM server client connection failed") })
         assertTrue(logs.none { entry -> entry.message.contains("state -> ERROR") })
     }
+
+    @Test
+    fun `stop while accept is blocked stays disconnected without error`() {
+        val serverSocket = FakeServerSocket()
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = { FakeRfcommBluetoothAdapter(serverSocket) },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+        val events = CopyOnWriteArrayList<GlassesTransportEvent>()
+        val eventJob = transportScope.launch {
+            transport.events.collect { events += it }
+        }
+
+        val logs = captureTimberLogs { tree ->
+            runBlocking { transport.start() }
+
+            waitUntil("transport listening") {
+                transport.state.value == GlassesTransportState.LISTENING &&
+                    tree.logs.any { entry -> entry.message.contains("state -> LISTENING") }
+            }
+
+            runBlocking { transport.stop("service-destroyed") }
+
+            waitUntil("transport stopped") {
+                transport.state.value == GlassesTransportState.DISCONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> DISCONNECTED reason=service-destroyed") }
+            }
+        }
+
+        transportScope.cancel()
+        runBlocking { eventJob.join() }
+
+        assertTrue(events.none { it is GlassesTransportEvent.Failure })
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "stopping RFCOMM server transport reason=service-destroyed")
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "cleaning up RFCOMM sockets reason=stop:service-destroyed")
+        assertTrue(logs.none { entry -> entry.message.contains("RFCOMM server accept loop failed") })
+        assertTrue(logs.none { entry -> entry.message.contains("state -> ERROR") })
+    }
+
+    @Test
+    fun `stop while client is connected does not bounce back to listening`() {
+        val serverSocket = FakeServerSocket()
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = { FakeRfcommBluetoothAdapter(serverSocket) },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+        val clientInput = ControlledInputStream()
+        val client = FakeClientSocket(
+            remoteDevice = RfcommRemoteDeviceInfo(
+                address = "12:34:56:78:9A:BC",
+                bondState = BluetoothDevice.BOND_BONDED,
+            ),
+            input = clientInput,
+            output = RecordingOutputStream(),
+        )
+        val events = CopyOnWriteArrayList<GlassesTransportEvent>()
+        val eventJob = transportScope.launch {
+            transport.events.collect { events += it }
+        }
+
+        val logs = captureTimberLogs { tree ->
+            serverSocket.enqueueAcceptedClient(client)
+
+            runBlocking { transport.start() }
+
+            waitUntil("bonded client attach") {
+                transport.state.value == GlassesTransportState.CONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> CONNECTED") }
+            }
+
+            runBlocking { transport.stop("service-destroyed") }
+
+            waitUntil("transport stopped") {
+                transport.state.value == GlassesTransportState.DISCONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> DISCONNECTED reason=service-destroyed") }
+            }
+
+            Thread.sleep(100L)
+        }
+
+        transportScope.cancel()
+        runBlocking { eventJob.join() }
+
+        assertTrue(events.none { it is GlassesTransportEvent.Failure })
+        assertTrue(logs.none { entry -> entry.message.contains("state -> LISTENING reason=waiting for next client") })
+        assertTrue(logs.none { entry -> entry.message.contains("state -> ERROR") })
+    }
 }
 
 private const val RFCOMM_SERVER_TAG = "rfcomm-server"

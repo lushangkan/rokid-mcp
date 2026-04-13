@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -147,6 +148,7 @@ class AndroidRfcommServerTransport internal constructor(
     private val internalState = MutableStateFlow(GlassesTransportState.IDLE)
     private val internalEvents = MutableSharedFlow<GlassesTransportEvent>(extraBufferCapacity = 32)
     private val writeMutex = Mutex()
+    private val closeMutex = Mutex()
     private val incomingFrameExtractor = IncrementalFrameExtractor()
     private val serviceUuid = UUID.fromString(LocalProtocolConstants.RFCOMM_SERVICE_UUID)
 
@@ -154,6 +156,8 @@ class AndroidRfcommServerTransport internal constructor(
     private var clientSocket: RfcommClientSocketHandle? = null
     private var acceptLoopJob: Job? = null
     private var readLoopJob: Job? = null
+    @Volatile
+    private var shutdownReason: String? = null
 
     override val state: StateFlow<GlassesTransportState> = internalState
     override val events: Flow<GlassesTransportEvent> = internalEvents
@@ -172,7 +176,10 @@ class AndroidRfcommServerTransport internal constructor(
                 ?: throw IllegalStateException("bluetooth adapter is unavailable")
             Timber.tag(RFCOMM_SERVER_LOG_TAG).d("bluetooth adapter available")
 
-            closeSocketsSilently("restart-before-listen")
+            closeMutex.withLock {
+                shutdownReason = null
+                closeSocketsSilently("restart-before-listen")
+            }
             Timber.tag(RFCOMM_SERVER_LOG_TAG).d(
                 "creating RFCOMM listen socket service=%s uuid=%s",
                 LocalProtocolConstants.RFCOMM_SERVICE_NAME,
@@ -218,14 +225,9 @@ class AndroidRfcommServerTransport internal constructor(
 
                         attachClient(acceptedSocket)
                     } catch (error: IOException) {
-                        if (serverSocket == null) {
+                        if (handleAcceptFailure(listeningSocket, error)) {
                             return@launch
                         }
-
-                        Timber.tag(RFCOMM_SERVER_LOG_TAG).e(error, "RFCOMM server accept loop failed")
-                        transitionTo(GlassesTransportState.ERROR, reason = "accept loop failed", error = error)
-                        internalEvents.emit(GlassesTransportEvent.Failure(IOException("rfcomm server accept failed", error)))
-                        return@launch
                     }
                 }
             }
@@ -264,11 +266,22 @@ class AndroidRfcommServerTransport internal constructor(
 
     override suspend fun stop(reason: String) {
         Timber.tag(RFCOMM_SERVER_LOG_TAG).d("stopping RFCOMM server transport reason=%s", reason)
-        acceptLoopJob?.cancel()
-        acceptLoopJob = null
-        readLoopJob?.cancel()
-        readLoopJob = null
-        closeSocketsSilently("stop:$reason")
+        val currentJob = currentCoroutineContext()[Job]
+        val cleanup = closeMutex.withLock {
+            shutdownReason = reason
+            val trackedAcceptLoop = acceptLoopJob
+            val trackedReadLoop = readLoopJob
+            acceptLoopJob = null
+            readLoopJob = null
+            closeSocketsSilently("stop:$reason")
+            TransportCleanup(
+                acceptLoopJob = trackedAcceptLoop,
+                readLoopJob = trackedReadLoop,
+            )
+        }
+
+        cleanup.acceptLoopJob?.takeUnless { it === currentJob }?.cancel()
+        cleanup.readLoopJob?.takeUnless { it === currentJob }?.cancel()
         transitionTo(GlassesTransportState.DISCONNECTED, reason = reason)
         internalEvents.emit(GlassesTransportEvent.ConnectionClosed(reason))
     }
@@ -288,7 +301,10 @@ class AndroidRfcommServerTransport internal constructor(
                 while (true) {
                     val count = socket.inputStream.read(buffer)
                     if (count < 0) {
-                        handleClientDisconnected("rfcomm server client disconnected")
+                        handleClientStreamClosed(
+                            socket = socket,
+                            reason = "rfcomm server client disconnected",
+                        )
                         return@launch
                     }
 
@@ -318,10 +334,12 @@ class AndroidRfcommServerTransport internal constructor(
         socket: RfcommClientSocketHandle,
         error: IOException,
     ) {
-        if (clientSocket !== socket) {
-            Timber.tag(RFCOMM_SERVER_LOG_TAG).d(
+        val expectedShutdown = expectedShutdownReasonForClient(socket)
+        if (expectedShutdown != null) {
+            Timber.tag(RFCOMM_SERVER_LOG_TAG).i(
                 error,
-                "ignoring RFCOMM read failure from stale client socket",
+                "ignoring RFCOMM read failure after shutdown reason=%s",
+                expectedShutdown,
             )
             return
         }
@@ -332,6 +350,42 @@ class AndroidRfcommServerTransport internal constructor(
         }
 
         handleClientFailure(IOException("rfcomm server read failed", error))
+    }
+
+    private suspend fun handleClientStreamClosed(
+        socket: RfcommClientSocketHandle,
+        reason: String,
+    ) {
+        val expectedShutdown = expectedShutdownReasonForClient(socket)
+        if (expectedShutdown != null) {
+            Timber.tag(RFCOMM_SERVER_LOG_TAG).i(
+                "ignoring RFCOMM client close after shutdown reason=%s",
+                expectedShutdown,
+            )
+            return
+        }
+
+        handleClientDisconnected(reason)
+    }
+
+    private suspend fun handleAcceptFailure(
+        listeningSocket: RfcommServerSocketHandle,
+        error: IOException,
+    ): Boolean {
+        val expectedShutdown = expectedShutdownReasonForAccept(listeningSocket)
+        if (expectedShutdown != null) {
+            Timber.tag(RFCOMM_SERVER_LOG_TAG).i(
+                error,
+                "ignoring RFCOMM server accept failure after shutdown reason=%s",
+                expectedShutdown,
+            )
+            return true
+        }
+
+        Timber.tag(RFCOMM_SERVER_LOG_TAG).e(error, "RFCOMM server accept loop failed")
+        transitionTo(GlassesTransportState.ERROR, reason = "accept loop failed", error = error)
+        internalEvents.emit(GlassesTransportEvent.Failure(IOException("rfcomm server accept failed", error)))
+        return true
     }
 
     private suspend fun handleClientDisconnected(reason: String) {
@@ -423,6 +477,31 @@ class AndroidRfcommServerTransport internal constructor(
             Timber.tag(RFCOMM_SERVER_LOG_TAG).w(error, "failed to close $resourceName")
         }
     }
+
+    private suspend fun expectedShutdownReasonForClient(socket: RfcommClientSocketHandle): String? {
+        return closeMutex.withLock {
+            when {
+                clientSocket !== socket -> shutdownReason ?: "client socket already closed"
+                shutdownReason != null -> shutdownReason
+                else -> null
+            }
+        }
+    }
+
+    private suspend fun expectedShutdownReasonForAccept(listeningSocket: RfcommServerSocketHandle): String? {
+        return closeMutex.withLock {
+            when {
+                serverSocket !== listeningSocket -> shutdownReason ?: "server socket already closed"
+                shutdownReason != null -> shutdownReason
+                else -> null
+            }
+        }
+    }
+
+    private data class TransportCleanup(
+        val acceptLoopJob: Job?,
+        val readLoopJob: Job?,
+    )
 }
 
 private fun RfcommRemoteDeviceInfo?.maskedAddress(): String = maskBluetoothMacAddress(this?.address)
