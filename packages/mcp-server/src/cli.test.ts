@@ -131,19 +131,25 @@ describe("runStdioServerCli", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("source CLI startup exits non-zero and writes to stderr when env is missing", async () => {
-    const cliEntryPath = join(import.meta.dir, "cli.ts");
-    const env = { ...process.env };
+  test("source CLI runtime exits non-zero and writes to stderr when startup fails", async () => {
+    const cliModuleUrl = pathToFileURL(join(import.meta.dir, "cli.ts")).href;
 
-    delete env.RELAY_BASE_URL;
-    delete env.ROKID_DEFAULT_DEVICE_ID;
-
-    const result = await runBunProcess([cliEntryPath], env);
+    const result = await runBunProcess([
+      "--eval",
+      `
+        const { runStdioServerCli } = await import(${JSON.stringify(cliModuleUrl)});
+        await runStdioServerCli({
+          readEnv: () => {
+            throw new Error("simulated startup failure");
+          },
+        });
+      `,
+    ]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Failed to start MCP stdio server");
-    expect(result.stderr).toContain("Missing required environment variable: RELAY_BASE_URL");
+    expect(result.stderr).toContain("simulated startup failure");
   });
 
   test("built CLI exits non-zero and keeps stdout clean when env is missing", async () => {
