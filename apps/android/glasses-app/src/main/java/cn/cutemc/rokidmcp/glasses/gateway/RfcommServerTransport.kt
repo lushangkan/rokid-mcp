@@ -305,13 +305,33 @@ class AndroidRfcommServerTransport internal constructor(
                     }
                 }
             } catch (error: IOException) {
-                handleClientFailure(IOException("rfcomm server read failed", error))
+                handleClientReadFailure(socket, error)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
                 handleClientFailure(IOException("rfcomm server frame decode failed", error))
             }
         }
+    }
+
+    private suspend fun handleClientReadFailure(
+        socket: RfcommClientSocketHandle,
+        error: IOException,
+    ) {
+        if (clientSocket !== socket) {
+            Timber.tag(RFCOMM_SERVER_LOG_TAG).d(
+                error,
+                "ignoring RFCOMM read failure from stale client socket",
+            )
+            return
+        }
+
+        if (error.isSocketClosedAfterRemoteDisconnect()) {
+            handleClientDisconnected("rfcomm server client disconnected")
+            return
+        }
+
+        handleClientFailure(IOException("rfcomm server read failed", error))
     }
 
     private suspend fun handleClientDisconnected(reason: String) {
@@ -406,6 +426,17 @@ class AndroidRfcommServerTransport internal constructor(
 }
 
 private fun RfcommRemoteDeviceInfo?.maskedAddress(): String = maskBluetoothMacAddress(this?.address)
+
+private fun IOException.isSocketClosedAfterRemoteDisconnect(): Boolean {
+    return generateSequence<Throwable>(this) { it.cause }
+        .mapNotNull { it.message?.lowercase() }
+        .any { message ->
+            "read return: -1" in message && (
+                "bt socket closed" in message ||
+                    "socket closed" in message
+            )
+        }
+}
 
 private fun maskBluetoothMacAddress(address: String?): String {
     if (address.isNullOrBlank()) {
