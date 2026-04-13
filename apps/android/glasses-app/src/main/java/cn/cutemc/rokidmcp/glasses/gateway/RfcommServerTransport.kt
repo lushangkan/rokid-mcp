@@ -8,6 +8,7 @@ import android.content.Context
 import cn.cutemc.rokidmcp.glasses.BluetoothPermission
 import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolConstants
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.IncrementalFrameExtractor
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import java.io.InputStream
@@ -146,6 +147,7 @@ class AndroidRfcommServerTransport internal constructor(
     private val internalState = MutableStateFlow(GlassesTransportState.IDLE)
     private val internalEvents = MutableSharedFlow<GlassesTransportEvent>(extraBufferCapacity = 32)
     private val writeMutex = Mutex()
+    private val incomingFrameExtractor = IncrementalFrameExtractor()
     private val serviceUuid = UUID.fromString(LocalProtocolConstants.RFCOMM_SERVICE_UUID)
 
     private var serverSocket: RfcommServerSocketHandle? = null
@@ -254,8 +256,7 @@ class AndroidRfcommServerTransport internal constructor(
                 throw error
             } catch (error: Throwable) {
                 Timber.tag(RFCOMM_SERVER_LOG_TAG).e(error, "failed to write RFCOMM frame to connected client")
-                transitionTo(GlassesTransportState.ERROR, reason = "frame send failed", error = error)
-                internalEvents.emit(GlassesTransportEvent.Failure(IOException("failed to write RFCOMM frame", error)))
+                handleClientFailure(IOException("failed to write RFCOMM frame", error))
                 throw error
             }
         }
@@ -275,6 +276,7 @@ class AndroidRfcommServerTransport internal constructor(
     private suspend fun attachClient(socket: RfcommClientSocketHandle) {
         val maskedDevice = socket.remoteDevice.maskedAddress()
         Timber.tag(RFCOMM_SERVER_LOG_TAG).d("attaching RFCOMM client device=%s", maskedDevice)
+        incomingFrameExtractor.reset()
         closeResourceSilently("previous RFCOMM client socket") { clientSocket?.close() }
         clientSocket = socket
         transitionTo(GlassesTransportState.CONNECTED, reason = "client attached device=$maskedDevice")
@@ -290,17 +292,22 @@ class AndroidRfcommServerTransport internal constructor(
                         return@launch
                     }
 
-                    val decoded = codec.decode(buffer.copyOf(count))
-                    logFrameMetadata(
-                        direction = "received",
-                        header = decoded.header,
-                        body = decoded.body,
-                        frameBytes = count,
-                    )
-                    internalEvents.emit(GlassesTransportEvent.FrameReceived(decoded.header, decoded.body))
+                    val frames = incomingFrameExtractor.append(buffer, offset = 0, length = count)
+                    for (frame in frames) {
+                        val decoded = codec.decode(frame)
+                        logFrameMetadata(
+                            direction = "received",
+                            header = decoded.header,
+                            body = decoded.body,
+                            frameBytes = frame.size,
+                        )
+                        internalEvents.emit(GlassesTransportEvent.FrameReceived(decoded.header, decoded.body))
+                    }
                 }
             } catch (error: IOException) {
                 handleClientFailure(IOException("rfcomm server read failed", error))
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 handleClientFailure(IOException("rfcomm server frame decode failed", error))
             }
@@ -309,6 +316,7 @@ class AndroidRfcommServerTransport internal constructor(
 
     private suspend fun handleClientDisconnected(reason: String) {
         Timber.tag(RFCOMM_SERVER_LOG_TAG).d("RFCOMM client disconnected reason=%s", reason)
+        incomingFrameExtractor.reset()
         closeResourceSilently("RFCOMM client socket after disconnect") { clientSocket?.close() }
         clientSocket = null
         transitionTo(GlassesTransportState.LISTENING, reason = "waiting for next client")
@@ -317,6 +325,7 @@ class AndroidRfcommServerTransport internal constructor(
 
     private suspend fun handleClientFailure(error: IOException) {
         Timber.tag(RFCOMM_SERVER_LOG_TAG).e(error, "RFCOMM server client connection failed")
+        incomingFrameExtractor.reset()
         closeResourceSilently("RFCOMM client socket after failure") { clientSocket?.close() }
         clientSocket = null
         transitionTo(GlassesTransportState.ERROR, reason = "client connection failed", error = error)
@@ -377,6 +386,7 @@ class AndroidRfcommServerTransport internal constructor(
 
     private fun closeSocketsSilently(reason: String) {
         if (clientSocket == null && serverSocket == null) {
+            incomingFrameExtractor.reset()
             return
         }
 
@@ -385,6 +395,7 @@ class AndroidRfcommServerTransport internal constructor(
         closeResourceSilently("RFCOMM server socket") { serverSocket?.close() }
         clientSocket = null
         serverSocket = null
+        incomingFrameExtractor.reset()
     }
 
     private inline fun closeResourceSilently(resourceName: String, closeAction: () -> Unit) {

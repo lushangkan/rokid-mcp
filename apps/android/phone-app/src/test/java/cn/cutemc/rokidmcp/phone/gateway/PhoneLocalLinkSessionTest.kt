@@ -534,7 +534,111 @@ class PhoneLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `decode failure emits session failed instead of cancelling the session loop`() = runTest {
+    fun `fragmented frame stays buffered until complete`() = runTest {
+        val transport = FakeRfcommClientTransport()
+        val session = PhoneLocalLinkSession(
+            transport = transport,
+            helloConfig = helloConfig,
+            codec = codec,
+            clock = FakeClock(1_717_172_370L),
+            sessionScope = backgroundScope,
+        )
+        val events = mutableListOf<PhoneLocalSessionEvent>()
+
+        backgroundScope.launch {
+            session.events.collect { events += it }
+        }
+
+        session.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+
+        val helloAckBytes = codec.encode(
+            LocalFrameHeader(
+                type = LocalMessageType.HELLO_ACK,
+                timestamp = 1_717_172_371L,
+                payload = HelloAckPayload(
+                    accepted = true,
+                    role = LinkRole.GLASSES,
+                ),
+            ),
+        )
+
+        transport.emitBytes(helloAckBytes.copyOfRange(0, 8))
+        runCurrent()
+        assertTrue(events.isEmpty())
+
+        transport.emitBytes(helloAckBytes.copyOfRange(8, helloAckBytes.size))
+        runCurrent()
+
+        assertTrue(events.contains(PhoneLocalSessionEvent.SessionReady))
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `coalesced read dispatches all frames in order`() = runTest {
+        val transport = FakeRfcommClientTransport()
+        val session = PhoneLocalLinkSession(
+            transport = transport,
+            helloConfig = helloConfig,
+            codec = codec,
+            clock = FakeClock(1_717_172_372L),
+            sessionScope = backgroundScope,
+        )
+        val events = mutableListOf<PhoneLocalSessionEvent>()
+
+        backgroundScope.launch {
+            session.events.collect { events += it }
+        }
+
+        session.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+        transport.updateState(PhoneTransportState.CONNECTED)
+        runCurrent()
+
+        val helloAckBytes = codec.encode(
+            LocalFrameHeader(
+                type = LocalMessageType.HELLO_ACK,
+                timestamp = 1_717_172_373L,
+                payload = HelloAckPayload(
+                    accepted = true,
+                    role = LinkRole.GLASSES,
+                ),
+            ),
+        )
+        val commandAckBytes = codec.encode(
+            LocalFrameHeader(
+                type = LocalMessageType.COMMAND_ACK,
+                requestId = "req-1",
+                timestamp = 1_717_172_374L,
+                payload = CommandAck(
+                    action = CommandAction.DISPLAY_TEXT,
+                    acceptedAt = 1_717_172_374L,
+                    runtimeState = LocalRuntimeState.READY,
+                ),
+            ),
+        )
+
+        transport.emitBytes(helloAckBytes + commandAckBytes)
+        runCurrent()
+
+        val readyIndex = events.indexOfFirst { it == PhoneLocalSessionEvent.SessionReady }
+        val commandIndex = events.indexOfFirst {
+            it is PhoneLocalSessionEvent.FrameReceived && it.header.type == LocalMessageType.COMMAND_ACK
+        }
+
+        assertTrue(readyIndex >= 0)
+        assertTrue(commandIndex > readyIndex)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `malformed complete frame emits session failed instead of cancelling the session loop`() = runTest {
         val transport = FakeRfcommClientTransport()
         val session = PhoneLocalLinkSession(
             transport = transport,
@@ -554,7 +658,19 @@ class PhoneLocalLinkSessionTest {
             runCurrent()
             transport.updateState(PhoneTransportState.CONNECTED)
             runCurrent()
-            transport.emitBytes(byteArrayOf(0x01, 0x02, 0x03))
+            val malformedFrame = codec.encode(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO_ACK,
+                    timestamp = 1_717_172_376L,
+                    payload = HelloAckPayload(
+                        accepted = true,
+                        role = LinkRole.GLASSES,
+                    ),
+                ),
+            ).clone().apply {
+                this[15] = (this[15].toInt() xor 0x01).toByte()
+            }
+            transport.emitBytes(malformedFrame)
             runCurrent()
             backgroundScope.launch { session.stop("test complete") }
             runCurrent()
@@ -564,11 +680,11 @@ class PhoneLocalLinkSessionTest {
 
         assertEquals("BLUETOOTH_PROTOCOL_ERROR", failure.code)
         assertTrue(failure.message.contains("failed to decode local frame"))
-        assertTrue(failure.message.contains("Frame is shorter than fixed header"))
+        assertTrue(failure.message.contains("Header CRC32 mismatch"))
         logs.assertLog(Log.ERROR, "local-session", "failed to decode local frame from glasses")
         logs.assertLog(Log.ERROR, "local-session", "local session failed code=BLUETOOTH_PROTOCOL_ERROR")
         logs.assertNoSensitiveData()
-        assertTrue(logs.any { it.throwable?.message?.contains("Frame is shorter than fixed header") == true })
+        assertTrue(logs.any { it.throwable?.message?.contains("Header CRC32 mismatch") == true })
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
