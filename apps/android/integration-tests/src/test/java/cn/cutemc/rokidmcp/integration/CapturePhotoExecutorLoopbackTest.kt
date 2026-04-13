@@ -25,6 +25,7 @@ import cn.cutemc.rokidmcp.phone.gateway.LocalFrameSender
 import cn.cutemc.rokidmcp.phone.gateway.PhoneGatewayConfig
 import cn.cutemc.rokidmcp.phone.gateway.PhoneHelloConfig
 import cn.cutemc.rokidmcp.phone.gateway.PhoneLocalLinkSession
+import cn.cutemc.rokidmcp.phone.gateway.PhoneLocalSessionEvent
 import cn.cutemc.rokidmcp.phone.gateway.PhoneRuntimeStore
 import cn.cutemc.rokidmcp.phone.gateway.PhoneTransportEvent
 import cn.cutemc.rokidmcp.phone.gateway.PhoneTransportState
@@ -37,6 +38,7 @@ import cn.cutemc.rokidmcp.phone.gateway.RelaySessionEvent
 import cn.cutemc.rokidmcp.phone.gateway.RelayWebSocket
 import cn.cutemc.rokidmcp.phone.gateway.RfcommClientTransport
 import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
 import cn.cutemc.rokidmcp.share.protocol.relay.CapturePhotoCommandDispatchPayload
@@ -50,6 +52,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertTrue
@@ -60,9 +63,46 @@ import org.robolectric.annotation.Config
 class CapturePhotoExecutorLoopbackTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `loopback capture uses glasses executor and uploads before terminal result`() = runTest {
+    fun `loopback capture tolerates fragmented chunk delivery and uploads before terminal result`() = runTest {
+        assertCaptureLoopbackOutcome(
+            runCapturePhotoLoopback(
+                streamConfig = LoopbackStreamConfig(
+                    clientToServer = LoopbackByteDeliveryMode.Fragmented(
+                        chunkSizes = listOf(2, 3, 5, 8),
+                    ),
+                    serverToClient = LoopbackByteDeliveryMode.Fragmented(
+                        chunkSizes = listOf(1, 2, 3, 5, 8, 13),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `loopback capture tolerates coalesced chunk delivery and uploads before terminal result`() = runTest {
+        assertCaptureLoopbackOutcome(
+            runCapturePhotoLoopback(
+                streamConfig = LoopbackStreamConfig(
+                    clientToServer = LoopbackByteDeliveryMode.Fragmented(
+                        chunkSizes = listOf(2, 3, 5, 8),
+                    ),
+                    serverToClient = LoopbackByteDeliveryMode.Coalesced(
+                        framesPerEmission = 2,
+                        chunkSizes = listOf(1, 4, 7, 11, 16),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun TestScope.runCapturePhotoLoopback(
+        streamConfig: LoopbackStreamConfig,
+    ): CapturePhotoLoopbackOutcome {
         val imageBytes = "jpeg-loopback".encodeToByteArray()
         val webSocket = ExecutorRelayWebSocket()
+        val phoneEvents = mutableListOf<PhoneLocalSessionEvent>()
         val relayClient = RelaySessionClient(
             webSocket = webSocket,
             runtimeStore = PhoneRuntimeStore(),
@@ -97,7 +137,7 @@ class CapturePhotoExecutorLoopbackTest {
             """.trimIndent(),
         )
 
-        val pair = ExecutorLoopbackPair()
+        val pair = ExecutorLoopbackPair(streamConfig = streamConfig)
         val localCodec = DefaultLocalFrameCodec()
         val phoneSession = PhoneLocalLinkSession(
             transport = pair.client,
@@ -181,6 +221,7 @@ class CapturePhotoExecutorLoopbackTest {
         )
         backgroundScope.launch {
             phoneSession.events.collect { event ->
+                phoneEvents += event
                 bridge.handleLocalSessionEvent(event)
             }
         }
@@ -189,6 +230,8 @@ class CapturePhotoExecutorLoopbackTest {
         glassesSession.start()
         runCurrent()
         pair.connect()
+        runCurrent()
+        pair.flush()
         runCurrent()
 
         bridge.handleRelaySessionEvent(
@@ -213,17 +256,39 @@ class CapturePhotoExecutorLoopbackTest {
             ),
         )
         runCurrent()
+        pair.flush()
+        runCurrent()
 
-        val resultIndex = webSocket.sentTexts.indexOfFirst { it.contains("\"type\":\"command_result\"") }
-        val uploadedIndex = webSocket.sentTexts.indexOfFirst { it.contains("\"status\":\"image_uploaded\"") }
+        return CapturePhotoLoopbackOutcome(
+            webSocket = webSocket,
+            phoneEvents = phoneEvents,
+        )
+    }
+
+    private fun assertCaptureLoopbackOutcome(outcome: CapturePhotoLoopbackOutcome) {
+        val resultIndex = outcome.webSocket.sentTexts.indexOfFirst { it.contains("\"type\":\"command_result\"") }
+        val uploadedIndex = outcome.webSocket.sentTexts.indexOfFirst { it.contains("\"status\":\"image_uploaded\"") }
         assertTrue(uploadedIndex >= 0)
         assertTrue(resultIndex > uploadedIndex)
+        assertTrue(
+            outcome.phoneEvents.none {
+                it is PhoneLocalSessionEvent.SessionFailed &&
+                    it.code == LocalProtocolErrorCodes.BLUETOOTH_PROTOCOL_ERROR
+            },
+        )
     }
 }
 
-private class ExecutorLoopbackPair {
-    val client = ExecutorLoopbackClientTransport()
-    val server = ExecutorLoopbackServerTransport(client)
+private data class CapturePhotoLoopbackOutcome(
+    val webSocket: ExecutorRelayWebSocket,
+    val phoneEvents: List<PhoneLocalSessionEvent>,
+)
+
+private class ExecutorLoopbackPair(
+    streamConfig: LoopbackStreamConfig = LoopbackStreamConfig(),
+) {
+    val client = ExecutorLoopbackClientTransport(streamConfig.clientToServer)
+    val server = ExecutorLoopbackServerTransport(client, streamConfig.serverToClient)
 
     init {
         client.bind(server)
@@ -233,14 +298,22 @@ private class ExecutorLoopbackPair {
         server.emitConnected()
         client.emitConnected()
     }
+
+    suspend fun flush() {
+        client.flushPending()
+        server.flushPending()
+    }
 }
 
-private class ExecutorLoopbackClientTransport : RfcommClientTransport {
+private class ExecutorLoopbackClientTransport(
+    clientToServerDelivery: LoopbackByteDeliveryMode = LoopbackByteDeliveryMode.ExactFrame,
+) : RfcommClientTransport {
     private val _state = MutableStateFlow(PhoneTransportState.IDLE)
     override val state: StateFlow<PhoneTransportState> = _state
 
     private val _events = MutableSharedFlow<PhoneTransportEvent>(extraBufferCapacity = 32)
     override val events: Flow<PhoneTransportEvent> = _events
+    private val outgoingStream = LoopbackByteStream(clientToServerDelivery)
 
     private lateinit var peer: ExecutorLoopbackServerTransport
 
@@ -251,7 +324,7 @@ private class ExecutorLoopbackClientTransport : RfcommClientTransport {
     override suspend fun start(targetDeviceAddress: String) = Unit
 
     override suspend fun send(bytes: ByteArray) {
-        peer.receiveFromClient(bytes)
+        outgoingStream.emitFrame(bytes, peer::receiveFromClient)
     }
 
     override suspend fun stop(reason: String) = Unit
@@ -264,34 +337,48 @@ private class ExecutorLoopbackClientTransport : RfcommClientTransport {
     suspend fun receiveFromServer(bytes: ByteArray) {
         _events.emit(PhoneTransportEvent.BytesReceived(bytes))
     }
+
+    suspend fun flushPending() {
+        outgoingStream.flush(peer::receiveFromClient)
+    }
 }
 
 private class ExecutorLoopbackServerTransport(
     private val client: ExecutorLoopbackClientTransport,
+    serverToClientDelivery: LoopbackByteDeliveryMode = LoopbackByteDeliveryMode.ExactFrame,
 ) : RfcommServerTransport {
     private val codec = DefaultLocalFrameCodec()
+    private val incomingReassembler = LoopbackFrameReassembler()
     private val _state = MutableStateFlow(GlassesTransportState.IDLE)
     override val state: StateFlow<GlassesTransportState> = _state
 
     private val _events = MutableSharedFlow<GlassesTransportEvent>(extraBufferCapacity = 32)
     override val events: Flow<GlassesTransportEvent> = _events
+    private val outgoingStream = LoopbackByteStream(serverToClientDelivery)
 
     override suspend fun start() = Unit
 
     override suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?) {
-        client.receiveFromServer(codec.encode(header, body))
+        outgoingStream.emitFrame(codec.encode(header, body), client::receiveFromServer)
     }
 
     override suspend fun stop(reason: String) = Unit
 
     suspend fun emitConnected() {
+        incomingReassembler.reset()
         _state.value = GlassesTransportState.CONNECTED
         _events.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.CONNECTED))
     }
 
     suspend fun receiveFromClient(bytes: ByteArray) {
-        val decoded = codec.decode(bytes)
-        _events.emit(GlassesTransportEvent.FrameReceived(decoded.header, decoded.body))
+        for (frameBytes in incomingReassembler.append(bytes)) {
+            val decoded = codec.decode(frameBytes)
+            _events.emit(GlassesTransportEvent.FrameReceived(decoded.header, decoded.body))
+        }
+    }
+
+    suspend fun flushPending() {
+        outgoingStream.flush(client::receiveFromServer)
     }
 }
 

@@ -6,6 +6,7 @@ import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
 import cn.cutemc.rokidmcp.share.protocol.local.DecodedFrame
 import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
 import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
+import cn.cutemc.rokidmcp.share.protocol.local.IncrementalFrameExtractor
 import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameCodec
 import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
@@ -80,6 +81,7 @@ open class PhoneLocalLinkSession(
     private var nextPingSeq: Long = 1L
     private var waitingForPong: PendingPong? = null
     private var sessionReady = false
+    private val frameExtractor = IncrementalFrameExtractor()
 
     open suspend fun start(targetDeviceAddress: String) {
         if (eventJob?.isActive == true) {
@@ -131,26 +133,42 @@ open class PhoneLocalLinkSession(
 
         sessionReady = false
         waitingForPong = null
+        frameExtractor.reset()
         Timber.tag(LOG_TAG).i("transport connected; sending HELLO")
         sendHello()
         scheduleHelloTimeout()
     }
 
     private suspend fun handleReceivedBytes(bytes: ByteArray) {
-        val frame = try {
-            codec.decode(bytes)
+        val extractedFrames = try {
+            frameExtractor.append(bytes)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            Timber.tag(LOG_TAG).e(error, "failed to decode local frame from glasses")
-            emitFailure(
-                code = LocalProtocolErrorCodes.BLUETOOTH_PROTOCOL_ERROR,
-                message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
-            )
+            emitProtocolFailure(error)
             return
         }
 
-        handleFrame(frame)
+        for (frameBytes in extractedFrames) {
+            val frame = try {
+                codec.decode(frameBytes)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                emitProtocolFailure(error)
+                return
+            }
+
+            handleFrame(frame)
+        }
+    }
+
+    private suspend fun emitProtocolFailure(error: Exception) {
+        Timber.tag(LOG_TAG).e(error, "failed to decode local frame from glasses")
+        emitFailure(
+            code = LocalProtocolErrorCodes.BLUETOOTH_PROTOCOL_ERROR,
+            message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
+        )
     }
 
     private suspend fun handleFrame(frame: DecodedFrame) {
@@ -343,6 +361,7 @@ open class PhoneLocalLinkSession(
         keepaliveJob = null
         pongTimeoutJob?.cancel()
         pongTimeoutJob = null
+        frameExtractor.reset()
         sessionReady = false
         waitingForPong = null
     }

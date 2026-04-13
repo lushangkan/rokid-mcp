@@ -253,9 +253,11 @@ class RelayCommandBridgeLoopbackTest {
     }
 }
 
-private class BridgeLoopbackPair {
-    val client = BridgeLoopbackClientTransport()
-    val server = BridgeLoopbackServerTransport(client)
+private class BridgeLoopbackPair(
+    streamConfig: LoopbackStreamConfig = LoopbackStreamConfig(),
+) {
+    val client = BridgeLoopbackClientTransport(streamConfig.clientToServer)
+    val server = BridgeLoopbackServerTransport(client, streamConfig.serverToClient)
 
     init {
         client.bind(server)
@@ -265,14 +267,22 @@ private class BridgeLoopbackPair {
         server.emitConnected()
         client.emitConnected()
     }
+
+    suspend fun flush() {
+        client.flushPending()
+        server.flushPending()
+    }
 }
 
-private class BridgeLoopbackClientTransport : RfcommClientTransport {
+private class BridgeLoopbackClientTransport(
+    clientToServerDelivery: LoopbackByteDeliveryMode = LoopbackByteDeliveryMode.ExactFrame,
+) : RfcommClientTransport {
     private val _state = MutableStateFlow(PhoneTransportState.IDLE)
     override val state: StateFlow<PhoneTransportState> = _state
 
     private val _events = MutableSharedFlow<PhoneTransportEvent>(extraBufferCapacity = 32)
     override val events: Flow<PhoneTransportEvent> = _events
+    private val outgoingStream = LoopbackByteStream(clientToServerDelivery)
 
     private lateinit var peer: BridgeLoopbackServerTransport
 
@@ -283,7 +293,7 @@ private class BridgeLoopbackClientTransport : RfcommClientTransport {
     override suspend fun start(targetDeviceAddress: String) = Unit
 
     override suspend fun send(bytes: ByteArray) {
-        peer.receiveFromClient(bytes)
+        outgoingStream.emitFrame(bytes, peer::receiveFromClient)
     }
 
     override suspend fun stop(reason: String) = Unit
@@ -296,50 +306,65 @@ private class BridgeLoopbackClientTransport : RfcommClientTransport {
     suspend fun receiveFromServer(bytes: ByteArray) {
         _events.emit(PhoneTransportEvent.BytesReceived(bytes))
     }
+
+    suspend fun flushPending() {
+        outgoingStream.flush(peer::receiveFromClient)
+    }
 }
 
 private class BridgeLoopbackServerTransport(
     private val client: BridgeLoopbackClientTransport,
+    serverToClientDelivery: LoopbackByteDeliveryMode = LoopbackByteDeliveryMode.ExactFrame,
 ) {
     private val codec = DefaultLocalFrameCodec()
+    private val incomingReassembler = LoopbackFrameReassembler()
+    private val outgoingStream = LoopbackByteStream(serverToClientDelivery)
 
-    suspend fun emitConnected() = Unit
+    suspend fun emitConnected() {
+        incomingReassembler.reset()
+    }
 
     suspend fun receiveFromClient(bytes: ByteArray) {
-        val frame = codec.decode(bytes)
-        when (frame.header.type) {
-            LocalMessageType.HELLO -> {
-                sendFrame(
-                    LocalFrameHeader(
-                        type = LocalMessageType.HELLO_ACK,
-                        timestamp = 1_717_173_000L,
-                        payload = HelloAckPayload(
-                            accepted = true,
-                            role = LinkRole.GLASSES,
-                            capabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
-                            runtimeState = LocalRuntimeState.READY,
+        for (frameBytes in incomingReassembler.append(bytes)) {
+            val frame = codec.decode(frameBytes)
+            when (frame.header.type) {
+                LocalMessageType.HELLO -> {
+                    sendFrame(
+                        LocalFrameHeader(
+                            type = LocalMessageType.HELLO_ACK,
+                            timestamp = 1_717_173_000L,
+                            payload = HelloAckPayload(
+                                accepted = true,
+                                role = LinkRole.GLASSES,
+                                capabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
+                                runtimeState = LocalRuntimeState.READY,
+                            ),
                         ),
-                    ),
-                )
-            }
+                    )
+                }
 
-            LocalMessageType.PING -> {
-                val ping = frame.header.payload as PingPayload
-                sendFrame(
-                    LocalFrameHeader(
-                        type = LocalMessageType.PONG,
-                        timestamp = 1_717_173_000L,
-                        payload = PongPayload(seq = ping.seq, nonce = ping.nonce),
-                    ),
-                )
-            }
+                LocalMessageType.PING -> {
+                    val ping = frame.header.payload as PingPayload
+                    sendFrame(
+                        LocalFrameHeader(
+                            type = LocalMessageType.PONG,
+                            timestamp = 1_717_173_000L,
+                            payload = PongPayload(seq = ping.seq, nonce = ping.nonce),
+                        ),
+                    )
+                }
 
-            else -> Unit
+                else -> Unit
+            }
         }
     }
 
     suspend fun sendFrame(header: LocalFrameHeader<*>, body: ByteArray? = null) {
-        client.receiveFromServer(codec.encode(header, body))
+        outgoingStream.emitFrame(codec.encode(header, body), client::receiveFromServer)
+    }
+
+    suspend fun flushPending() {
+        outgoingStream.flush(client::receiveFromServer)
     }
 }
 

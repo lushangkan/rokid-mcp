@@ -198,9 +198,11 @@ class DisplayTextCommandLoopbackTest {
     }
 }
 
-private class DisplayLoopbackPair {
-    val client = DisplayLoopbackClientTransport()
-    val server = DisplayLoopbackServerTransport(client)
+private class DisplayLoopbackPair(
+    streamConfig: LoopbackStreamConfig = LoopbackStreamConfig(),
+) {
+    val client = DisplayLoopbackClientTransport(streamConfig.clientToServer)
+    val server = DisplayLoopbackServerTransport(client, streamConfig.serverToClient)
 
     init {
         client.bind(server)
@@ -210,14 +212,22 @@ private class DisplayLoopbackPair {
         server.emitConnected()
         client.emitConnected()
     }
+
+    suspend fun flush() {
+        client.flushPending()
+        server.flushPending()
+    }
 }
 
-private class DisplayLoopbackClientTransport : RfcommClientTransport {
+private class DisplayLoopbackClientTransport(
+    clientToServerDelivery: LoopbackByteDeliveryMode = LoopbackByteDeliveryMode.ExactFrame,
+) : RfcommClientTransport {
     private val _state = MutableStateFlow(PhoneTransportState.IDLE)
     override val state: StateFlow<PhoneTransportState> = _state
 
     private val _events = MutableSharedFlow<PhoneTransportEvent>(extraBufferCapacity = 32)
     override val events: Flow<PhoneTransportEvent> = _events
+    private val outgoingStream = LoopbackByteStream(clientToServerDelivery)
 
     private lateinit var peer: DisplayLoopbackServerTransport
 
@@ -228,7 +238,7 @@ private class DisplayLoopbackClientTransport : RfcommClientTransport {
     override suspend fun start(targetDeviceAddress: String) = Unit
 
     override suspend fun send(bytes: ByteArray) {
-        peer.receiveFromClient(bytes)
+        outgoingStream.emitFrame(bytes, peer::receiveFromClient)
     }
 
     override suspend fun stop(reason: String) = Unit
@@ -241,34 +251,48 @@ private class DisplayLoopbackClientTransport : RfcommClientTransport {
     suspend fun receiveFromServer(bytes: ByteArray) {
         _events.emit(PhoneTransportEvent.BytesReceived(bytes))
     }
+
+    suspend fun flushPending() {
+        outgoingStream.flush(peer::receiveFromClient)
+    }
 }
 
 private class DisplayLoopbackServerTransport(
     private val client: DisplayLoopbackClientTransport,
+    serverToClientDelivery: LoopbackByteDeliveryMode = LoopbackByteDeliveryMode.ExactFrame,
 ) : RfcommServerTransport {
     private val codec = DefaultLocalFrameCodec()
+    private val incomingReassembler = LoopbackFrameReassembler()
     private val _state = MutableStateFlow(GlassesTransportState.IDLE)
     override val state: StateFlow<GlassesTransportState> = _state
 
     private val _events = MutableSharedFlow<GlassesTransportEvent>(extraBufferCapacity = 32)
     override val events: Flow<GlassesTransportEvent> = _events
+    private val outgoingStream = LoopbackByteStream(serverToClientDelivery)
 
     override suspend fun start() = Unit
 
     override suspend fun send(header: LocalFrameHeader<*>, body: ByteArray?) {
-        client.receiveFromServer(codec.encode(header, body))
+        outgoingStream.emitFrame(codec.encode(header, body), client::receiveFromServer)
     }
 
     override suspend fun stop(reason: String) = Unit
 
     suspend fun emitConnected() {
+        incomingReassembler.reset()
         _state.value = GlassesTransportState.CONNECTED
         _events.emit(GlassesTransportEvent.StateChanged(GlassesTransportState.CONNECTED))
     }
 
     suspend fun receiveFromClient(bytes: ByteArray) {
-        val decoded = codec.decode(bytes)
-        _events.emit(GlassesTransportEvent.FrameReceived(decoded.header, decoded.body))
+        for (frameBytes in incomingReassembler.append(bytes)) {
+            val decoded = codec.decode(frameBytes)
+            _events.emit(GlassesTransportEvent.FrameReceived(decoded.header, decoded.body))
+        }
+    }
+
+    suspend fun flushPending() {
+        outgoingStream.flush(client::receiveFromServer)
     }
 }
 
