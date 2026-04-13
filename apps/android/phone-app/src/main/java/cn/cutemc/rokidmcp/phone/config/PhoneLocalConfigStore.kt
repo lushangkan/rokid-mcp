@@ -10,6 +10,7 @@ class PhoneLocalConfigStore(
         const val KEY_AUTH_TOKEN = "authToken"
         const val KEY_RELAY_BASE_URL = "relayBaseUrl"
         const val KEY_RECONNECT_DELAY_MS = "reconnectDelayMs"
+        const val KEY_TARGET_DEVICE_ADDRESS = "targetDeviceAddress"
     }
 
     fun load(): PhoneLocalConfig {
@@ -17,18 +18,20 @@ class PhoneLocalConfigStore(
         val authToken = prefs.getString(KEY_AUTH_TOKEN, null)
         val relayBaseUrl = prefs.getString(KEY_RELAY_BASE_URL, null)
         val reconnectDelayResolution = loadReconnectDelayMs()
+        val targetDeviceAddressResolution = loadTargetDeviceAddress()
 
         val isLoadedValid = deviceId != null && PhoneLocalConfig.isValidDeviceId(deviceId)
 
         if (isLoadedValid) {
             val normalizedConfig = PhoneLocalConfig(
-                deviceId = deviceId!!,
+                deviceId = deviceId,
                 authToken = authToken?.ifBlank { null },
                 relayBaseUrl = relayBaseUrl?.ifBlank { null },
                 reconnectDelayMs = reconnectDelayResolution.value,
+                targetDeviceAddress = targetDeviceAddressResolution.value,
             )
 
-            if (reconnectDelayResolution.shouldPersist) {
+            if (reconnectDelayResolution.shouldPersist || targetDeviceAddressResolution.shouldPersist) {
                 save(normalizedConfig)
             }
 
@@ -49,11 +52,17 @@ class PhoneLocalConfigStore(
             "reconnectDelayMs must be positive"
         }
 
+        val normalizedTargetDeviceAddress = PhoneLocalConfig.normalizeTargetDeviceAddress(config.targetDeviceAddress)
+        require(PhoneLocalConfig.isValidTargetDeviceAddress(normalizedTargetDeviceAddress)) {
+            "targetDeviceAddress must use Bluetooth MAC format"
+        }
+
         prefs.edit()
             .putString(KEY_DEVICE_ID, config.deviceId)
             .putString(KEY_AUTH_TOKEN, config.authToken ?: "")
             .putString(KEY_RELAY_BASE_URL, config.relayBaseUrl ?: "")
             .putLong(KEY_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+            .putString(KEY_TARGET_DEVICE_ADDRESS, normalizedTargetDeviceAddress)
             .apply()
     }
 
@@ -79,8 +88,26 @@ class PhoneLocalConfigStore(
         )
     }
 
+    private fun loadTargetDeviceAddress(): TargetDeviceAddressResolution {
+        val rawValue = prefs.getString(KEY_TARGET_DEVICE_ADDRESS, null)
+        val normalizedValue = rawValue
+            ?.let(PhoneLocalConfig::normalizeTargetDeviceAddress)
+            ?.takeIf(PhoneLocalConfig::isValidTargetDeviceAddress)
+            ?: PhoneLocalConfig.DEFAULT_TARGET_DEVICE_ADDRESS
+
+        return TargetDeviceAddressResolution(
+            value = normalizedValue,
+            shouldPersist = rawValue == null || rawValue != normalizedValue,
+        )
+    }
+
     private data class ReconnectDelayResolution(
         val value: Long,
+        val shouldPersist: Boolean,
+    )
+
+    private data class TargetDeviceAddressResolution(
+        val value: String,
         val shouldPersist: Boolean,
     )
 }
