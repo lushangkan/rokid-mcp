@@ -37,6 +37,7 @@ class PhoneGatewayService : LifecycleService() {
                             authToken = config.authToken,
                             relayBaseUrl = config.relayBaseUrl,
                             reconnectDelayMs = config.reconnectDelayMs,
+                            targetDeviceAddress = targetDeviceAddress,
                         ),
                     )
                 }
