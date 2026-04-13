@@ -82,9 +82,12 @@ class PhoneAppController(
     private var lastStartTargetDeviceAddress: String? = null
     private var lastEffectiveConfig: PhoneGatewayConfig? = null
     private var pendingReconnectJob: Job? = null
+    // Suppresses late reconnect scheduling after an explicit operator stop.
+    private var reconnectSuppressed: Boolean = false
 
     suspend fun start(targetDeviceAddress: String, preloadedConfig: PhoneGatewayConfig? = null) {
         Timber.tag("controller").i("start requested target=%s", maskBluetoothAddress(targetDeviceAddress))
+        reconnectSuppressed = false
         cancelPendingReconnect()
         if (_runState.value != GatewayRunState.IDLE && localSession != null) {
             stopActiveSession("restarting controller session")
@@ -115,7 +118,6 @@ class PhoneAppController(
         setRunState(GatewayRunState.STARTING)
         lastStartTargetDeviceAddress = targetDeviceAddress
         lastEffectiveConfig = config
-        setRunState(GatewayRunState.STARTING)
         lastReportedSnapshot = null
         currentTransportState = PhoneTransportState.CONNECTING
         isLocalSessionReady = false
@@ -225,6 +227,7 @@ class PhoneAppController(
     suspend fun stop(reason: String) {
         Timber.tag("controller").i("stop requested reason=%s", reason)
         setRunState(GatewayRunState.STOPPING)
+        reconnectSuppressed = true
         cancelPendingReconnect()
         stopActiveSession(reason)
         setRunState(GatewayRunState.STOPPED)
@@ -417,6 +420,10 @@ class PhoneAppController(
     }
 
     private fun scheduleRelayReconnect(reason: String) {
+        if (reconnectSuppressed) {
+            Timber.tag("controller").i("skipping relay reconnect because reconnect is suppressed")
+            return
+        }
         val config = lastEffectiveConfig ?: return
         val delayMs = config.reconnectDelayMs
 
@@ -426,12 +433,21 @@ class PhoneAppController(
 
         pendingReconnectJob = controllerScope.launch {
             delay(delayMs)
+            pendingReconnectJob = null
+            if (reconnectSuppressed) {
+                Timber.tag("controller").i("dropping scheduled relay reconnect because reconnect is suppressed")
+                return@launch
+            }
             Timber.tag("controller").i("executing scheduled relay reconnect")
             relaySessionClient?.connect()
         }
     }
 
     private fun scheduleFullReconnect(reason: String) {
+        if (reconnectSuppressed) {
+            Timber.tag("controller").i("skipping full reconnect because reconnect is suppressed")
+            return
+        }
         val target = lastStartTargetDeviceAddress ?: return
         val config = lastEffectiveConfig ?: return
         val delayMs = config.reconnectDelayMs
@@ -442,6 +458,11 @@ class PhoneAppController(
 
         pendingReconnectJob = controllerScope.launch {
             delay(delayMs)
+            pendingReconnectJob = null
+            if (reconnectSuppressed) {
+                Timber.tag("controller").i("dropping scheduled full reconnect because reconnect is suppressed")
+                return@launch
+            }
             Timber.tag("controller").i("executing scheduled full reconnect")
             start(target, config)
         }

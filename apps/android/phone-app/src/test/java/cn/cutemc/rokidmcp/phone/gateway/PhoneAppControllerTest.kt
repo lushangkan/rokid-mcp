@@ -129,6 +129,7 @@ class PhoneAppControllerTest {
                     authToken = "token",
                     relayBaseUrl = "https://relay.example.com",
                     appVersion = "1.0",
+                    reconnectDelayMs = 20_000L,
                 )
             },
             createTransport = {
@@ -349,6 +350,42 @@ class PhoneAppControllerTest {
         assertEquals(GatewayRunState.STOPPED, controller.runState.value)
         assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
         assertNull(runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `manual stop suppresses reconnect scheduled by transport close`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                    reconnectDelayMs = 2_500L,
+                )
+            },
+            createTransport = { transport },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+
+        controller.stop("manual")
+        runCurrent()
+        advanceTimeBy(2_500L)
+        runCurrent()
+
+        assertEquals(1, transport.startCount)
+        assertEquals(listOf("manual"), transport.stopReasons)
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
