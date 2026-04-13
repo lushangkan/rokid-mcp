@@ -403,6 +403,61 @@ class RfcommServerTransportTest {
         logs.assertNoSensitiveData()
         assertTrue(logs.any { entry -> entry.throwable?.cause?.message?.contains("Unexpected frame magic") == true })
     }
+
+    @Test
+    fun `android bluetooth read minus one exception is treated as disconnect`() {
+        val serverSocket = FakeServerSocket()
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = { FakeRfcommBluetoothAdapter(serverSocket) },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+        val clientInput = ControlledInputStream()
+        val client = FakeClientSocket(
+            remoteDevice = RfcommRemoteDeviceInfo(
+                address = "12:34:56:78:9A:BC",
+                bondState = BluetoothDevice.BOND_BONDED,
+            ),
+            input = clientInput,
+            output = RecordingOutputStream(),
+        )
+        val events = CopyOnWriteArrayList<GlassesTransportEvent>()
+        val eventJob = transportScope.launch {
+            transport.events.collect { events += it }
+        }
+
+        val logs = captureTimberLogs { tree ->
+            serverSocket.enqueueAcceptedClient(client)
+
+            runBlocking { transport.start() }
+
+            waitUntil("bonded client attach") {
+                transport.state.value == GlassesTransportState.CONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> CONNECTED") }
+            }
+
+            clientInput.fail(IOException("bt socket closed, read return: -1"))
+
+            waitUntil("client disconnect after bluetooth read close") {
+                transport.state.value == GlassesTransportState.LISTENING &&
+                    events.any { it is GlassesTransportEvent.ConnectionClosed } &&
+                    tree.logs.any { entry -> entry.message.contains("RFCOMM client disconnected") }
+            }
+
+            runBlocking { transport.stop("test-stop") }
+        }
+
+        transportScope.cancel()
+        runBlocking { eventJob.join() }
+
+        assertTrue(events.none { it is GlassesTransportEvent.Failure })
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "RFCOMM client disconnected")
+        assertTrue(logs.none { entry -> entry.message.contains("RFCOMM server client connection failed") })
+        assertTrue(logs.none { entry -> entry.message.contains("state -> ERROR") })
+    }
 }
 
 private const val RFCOMM_SERVER_TAG = "rfcomm-server"
@@ -466,6 +521,8 @@ private class ControlledInputStream : InputStream() {
     private sealed interface ReadAction {
         data class Bytes(val value: ByteArray) : ReadAction
 
+        data class Error(val exception: IOException) : ReadAction
+
         data object End : ReadAction
     }
 
@@ -479,6 +536,10 @@ private class ControlledInputStream : InputStream() {
 
     fun finish() {
         readActions.put(ReadAction.End)
+    }
+
+    fun fail(exception: IOException) {
+        readActions.put(ReadAction.Error(exception))
     }
 
     override fun read(): Int {
@@ -495,6 +556,8 @@ private class ControlledInputStream : InputStream() {
                     action.value.copyInto(buffer, destinationOffset = offset)
                     return action.value.size
                 }
+
+                is ReadAction.Error -> throw action.exception
 
                 ReadAction.End -> {
                     closed = true
