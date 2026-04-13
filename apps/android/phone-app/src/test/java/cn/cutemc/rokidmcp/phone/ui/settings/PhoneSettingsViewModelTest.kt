@@ -2,6 +2,7 @@ package cn.cutemc.rokidmcp.phone.ui.settings
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
 import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfigStore
 import cn.cutemc.rokidmcp.phone.gateway.GatewayRunState
 import cn.cutemc.rokidmcp.phone.gateway.PhoneAppController
@@ -63,6 +64,48 @@ class PhoneSettingsViewModelTest {
         assertTrue(viewModel.uiState.value.canSave)
         assertFalse(viewModel.uiState.value.canStart)
         assertEquals("5000", viewModel.uiState.value.reconnectDelayMs)
+        assertEquals(PhoneLocalConfig.DEFAULT_TARGET_DEVICE_ADDRESS, viewModel.uiState.value.targetDeviceAddress)
+    }
+
+    @Test
+    fun `init loads persisted target device address`() = runTest {
+        val configStore = makeConfigStore("persisted_target_device_address")
+        configStore.save(
+            PhoneLocalConfig(
+                deviceId = "phone-ab12cd34",
+                authToken = "token-123",
+                relayBaseUrl = "https://relay.example.com",
+                reconnectDelayMs = 8_000L,
+                targetDeviceAddress = "AA:BB:CC:DD:EE:FF",
+            ),
+        )
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+
+        scope.testScheduler.runCurrent()
+
+        assertEquals("AA:BB:CC:DD:EE:FF", viewModel.uiState.value.targetDeviceAddress)
     }
 
     @Test
@@ -130,6 +173,7 @@ class PhoneSettingsViewModelTest {
         viewModel.onAuthTokenChanged("token-123")
         viewModel.onRelayBaseUrlChanged("https://relay.example.com")
         viewModel.onReconnectDelayMsChanged("12000")
+        viewModel.onTargetDeviceAddressChanged("aa:bb:cc:dd:ee:ff")
         assertTrue(viewModel.save())
         scope.testScheduler.runCurrent()
 
@@ -138,6 +182,44 @@ class PhoneSettingsViewModelTest {
         assertEquals("token-123", loaded.authToken)
         assertEquals("https://relay.example.com", loaded.relayBaseUrl)
         assertEquals(12_000L, loaded.reconnectDelayMs)
+        assertEquals("AA:BB:CC:DD:EE:FF", loaded.targetDeviceAddress)
+    }
+
+    @Test
+    fun `invalid target device address disables save and start`() = runTest {
+        val configStore = makeConfigStore("invalid_target_device_address")
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(dispatcher)
+        val logs = PhoneUiLogStore()
+        val controller = PhoneAppController(
+            runtimeStore = PhoneRuntimeStore(),
+            logStore = PhoneLogStore(logs),
+            loadConfig = {
+                val config = configStore.load()
+                PhoneGatewayConfig(
+                    deviceId = config.deviceId,
+                    authToken = config.authToken,
+                    relayBaseUrl = config.relayBaseUrl,
+                    appVersion = "1.0",
+                )
+            },
+        )
+        val viewModel = PhoneSettingsViewModel(
+            controller = controller,
+            localConfigStore = configStore,
+            scope = scope,
+            ioDispatcher = dispatcher,
+        )
+        scope.testScheduler.runCurrent()
+
+        viewModel.onDeviceIdChanged("phone-ab12cd34")
+        viewModel.onAuthTokenChanged("token-123")
+        viewModel.onRelayBaseUrlChanged("https://relay.example.com")
+        viewModel.onTargetDeviceAddressChanged("invalid-address")
+        scope.testScheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.canSave)
+        assertFalse(viewModel.uiState.value.canStart)
     }
 
     @Test
