@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -117,6 +118,15 @@ internal class AndroidRfcommClientTransport(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val transportScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : RfcommClientTransport {
+    private companion object {
+        /**
+         * Keeps the blocking socket reader ahead of frame parsing/event handling during bursty chunk
+         * transfers. The queue is intentionally unbounded because the local protocol already caps the
+         * total in-flight image size, and dropping bytes here would corrupt the stream.
+         */
+        val RAW_BYTE_QUEUE_CAPACITY = Channel.UNLIMITED
+    }
+
     private val internalState = MutableStateFlow(PhoneTransportState.IDLE)
     private val internalEvents = MutableSharedFlow<PhoneTransportEvent>(extraBufferCapacity = 32)
     private val writeMutex = Mutex()
@@ -127,6 +137,8 @@ internal class AndroidRfcommClientTransport(
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
     private var readLoopJob: Job? = null
+    private var byteDispatchJob: Job? = null
+    private var rawByteQueue: Channel<ByteArray>? = null
     @Volatile
     private var shutdownReason: String? = null
 
@@ -197,6 +209,12 @@ internal class AndroidRfcommClientTransport(
 
     private fun startReadLoop(connectedSocket: RfcommClientSocket, maskedTargetAddress: String) {
         readLoopJob?.cancel()
+        byteDispatchJob?.cancel()
+
+        val byteQueue = Channel<ByteArray>(RAW_BYTE_QUEUE_CAPACITY)
+        rawByteQueue = byteQueue
+        startByteDispatchLoop(byteQueue)
+
         readLoopJob = transportScope.launch {
             val buffer = ByteArray(64 * 1024)
             Timber.tag(RFCOMM_CLIENT_TAG).i("read loop started target=%s", maskedTargetAddress)
@@ -212,7 +230,7 @@ internal class AndroidRfcommClientTransport(
                     }
 
                     Timber.tag(RFCOMM_CLIENT_TAG).v("read %d RFCOMM bytes", count)
-                    internalEvents.emit(PhoneTransportEvent.BytesReceived(buffer.copyOf(count)))
+                    byteQueue.send(buffer.copyOf(count))
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -224,6 +242,18 @@ internal class AndroidRfcommClientTransport(
                     maskedTargetAddress,
                     IOException("rfcomm client read loop failed", error),
                 )
+            }
+        }
+    }
+
+    private fun startByteDispatchLoop(byteQueue: Channel<ByteArray>) {
+        byteDispatchJob = transportScope.launch {
+            try {
+                for (bytes in byteQueue) {
+                    internalEvents.emit(PhoneTransportEvent.BytesReceived(bytes))
+                }
+            } catch (error: CancellationException) {
+                throw error
             }
         }
     }
@@ -261,25 +291,41 @@ internal class AndroidRfcommClientTransport(
 
     private suspend fun closeSocket(reason: String, emitClosedEvent: Boolean) {
         val currentJob = currentCoroutineContext()[Job]
-        val activeReadLoopJob = closeMutex.withLock {
+        val cleanup = closeMutex.withLock {
             val trackedReadLoop = readLoopJob
+            val trackedByteDispatch = byteDispatchJob
+            val trackedByteQueue = rawByteQueue
             if (trackedReadLoop == null && inputStream == null && outputStream == null && socket == null) {
                 return
             }
 
             readLoopJob = null
+            byteDispatchJob = null
+            rawByteQueue = null
             shutdownReason = reason
             Timber.tag(RFCOMM_CLIENT_TAG).i("cleaning up RFCOMM resources reason=%s", reason)
             closeSocketSilently(logCleanup = false)
-            trackedReadLoop
+            TransportCleanup(
+                readLoopJob = trackedReadLoop,
+                byteDispatchJob = trackedByteDispatch,
+                rawByteQueue = trackedByteQueue,
+            )
         }
 
         emitStateTransition(PhoneTransportState.DISCONNECTED)
         if (emitClosedEvent) {
             internalEvents.emit(PhoneTransportEvent.ConnectionClosed(reason))
         }
-        activeReadLoopJob?.takeUnless { it === currentJob }?.cancel()
+        cleanup.rawByteQueue?.close()
+        cleanup.readLoopJob?.takeUnless { it === currentJob }?.cancel()
+        cleanup.byteDispatchJob?.takeUnless { it === currentJob }?.cancel()
     }
+
+    private data class TransportCleanup(
+        val readLoopJob: Job?,
+        val byteDispatchJob: Job?,
+        val rawByteQueue: Channel<ByteArray>?,
+    )
 
     private fun closeSocketSilently(logCleanup: Boolean = true) {
         if (logCleanup && (inputStream != null || outputStream != null || socket != null)) {

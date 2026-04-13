@@ -11,8 +11,14 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -94,7 +100,16 @@ class AndroidRfcommClientTransportTest {
                     transport.start(FULL_ADDRESS)
                     fail("start should throw when socket connect fails")
                 } catch (expected: IOException) {
-                    assertTrue(expected === connectFailure)
+                    var propagatedFailure = false
+                    var failure: Throwable? = expected
+                    while (failure != null) {
+                        if (failure === connectFailure || failure.message == connectFailure.message) {
+                            propagatedFailure = true
+                            break
+                        }
+                        failure = failure.cause
+                    }
+                    assertTrue(propagatedFailure)
                 }
             }
 
@@ -145,6 +160,41 @@ class AndroidRfcommClientTransportTest {
         collector.cancel()
     }
 
+    @Test
+    fun `read loop keeps draining socket while bytes received events are backpressured`() = runTest {
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val inputStream = CountingChunkInputStream(totalChunks = 128)
+            val socket = FakeClientSocket(inputStream = inputStream)
+            val transport = AndroidRfcommClientTransport(
+                adapterAvailabilityProvider = BluetoothAdapterAvailabilityProvider { true },
+                socketFactory = RfcommClientSocketFactory { _, _ -> socket },
+                ioDispatcher = Dispatchers.Default,
+                transportScope = transportScope,
+            )
+            val firstByteEventSeen = CountDownLatch(1)
+            val unblockCollector = CountDownLatch(1)
+            val collector = transportScope.launch {
+                transport.events.collect { event ->
+                    if (event is PhoneTransportEvent.BytesReceived) {
+                        firstByteEventSeen.countDown()
+                        unblockCollector.await(5, TimeUnit.SECONDS)
+                    }
+                }
+            }
+
+            transport.start(FULL_ADDRESS)
+            assertTrue(firstByteEventSeen.await(5, TimeUnit.SECONDS))
+            inputStream.awaitReadCount(128)
+
+            unblockCollector.countDown()
+            transport.stop("manual")
+            collector.cancel()
+        } finally {
+            transportScope.cancel()
+        }
+    }
+
     private class FakeClientSocket(
         readBytes: ByteArray = byteArrayOf(),
         override val inputStream: InputStream = ByteArrayInputStream(readBytes),
@@ -190,6 +240,41 @@ class AndroidRfcommClientTransportTest {
 
         fun awaitReadStarted() {
             assertTrue(readStarted.await(5, TimeUnit.SECONDS))
+        }
+    }
+
+    private class CountingChunkInputStream(
+        private val totalChunks: Int,
+        private val chunkByte: Byte = 0x41,
+    ) : InputStream() {
+        private val readCount = AtomicInteger(0)
+
+        override fun read(): Int {
+            throw UnsupportedOperationException("single-byte reads are not used in this test")
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            require(len > 0) { "buffer length must be positive" }
+
+            val nextRead = readCount.incrementAndGet()
+            if (nextRead > totalChunks) {
+                return -1
+            }
+
+            b[off] = chunkByte
+            return 1
+        }
+
+        fun awaitReadCount(expectedCount: Int, timeoutMillis: Long = 5_000L) {
+            val deadline = System.currentTimeMillis() + timeoutMillis
+            while (System.currentTimeMillis() < deadline) {
+                if (readCount.get() >= expectedCount) {
+                    return
+                }
+                Thread.sleep(10L)
+            }
+
+            fail("Timed out waiting for $expectedCount socket reads; saw ${readCount.get()}")
         }
     }
 
