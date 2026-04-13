@@ -20,9 +20,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import cn.cutemc.rokidmcp.phone.config.PhoneLocalConfig
 import cn.cutemc.rokidmcp.phone.gateway.GatewayRunState
 import cn.cutemc.rokidmcp.phone.gateway.PhoneRuntimeSnapshot
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogEntry
+
+internal fun isStopActionEnabled(runState: GatewayRunState): Boolean {
+    return runState == GatewayRunState.STARTING || runState == GatewayRunState.RUNNING
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,7 +66,7 @@ fun PhoneSettingsScreen(
                     onValueChange = onDeviceIdChanged,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Device ID") },
-                    isError = !state.canSave,
+                    isError = !PhoneLocalConfig.isValidDeviceId(state.deviceId),
                 )
             }
             item {
@@ -78,6 +83,20 @@ fun PhoneSettingsScreen(
                     onValueChange = onRelayBaseUrlChanged,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Relay Base URL") },
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.targetDeviceAddress,
+                    onValueChange = onTargetDeviceAddressChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Target Device Address") },
+                    isError = !isValidTargetDeviceAddress(state.targetDeviceAddress),
+                    supportingText = {
+                        if (!isValidTargetDeviceAddress(state.targetDeviceAddress)) {
+                            Text("Use format AA:BB:CC:DD:EE:FF")
+                        }
+                    },
                 )
             }
             item {
@@ -99,21 +118,11 @@ fun PhoneSettingsScreen(
                     }
                 }
             }
-
             item { HorizontalDivider() }
-
-            item {
-                OutlinedTextField(
-                    value = state.targetDeviceAddress,
-                    onValueChange = onTargetDeviceAddressChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Target Device Address") },
-                )
-            }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onStart, enabled = state.canStart) { Text("Start") }
-                    Button(onClick = onStop) { Text("Stop") }
+                    Button(onClick = onStop, enabled = isStopActionEnabled(runState)) { Text("Stop") }
                 }
             }
             item {
