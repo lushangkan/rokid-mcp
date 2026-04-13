@@ -13,12 +13,15 @@ class PhoneGatewayConfigState(
         deviceId: String,
         authToken: String?,
         relayBaseUrl: String?,
+        reconnectDelayMs: Long = localConfigStore.load().reconnectDelayMs,
     ): PhoneGatewayConfig {
+        val currentConfig = localConfigStore.load()
         val local = PhoneLocalConfig(
             deviceId = deviceId,
             authToken = authToken?.ifBlank { null },
             relayBaseUrl = relayBaseUrl?.ifBlank { null },
-            reconnectDelayMs = localConfigStore.load().reconnectDelayMs,
+            reconnectDelayMs = normalizeReconnectDelayMs(reconnectDelayMs),
+            targetDeviceAddress = currentConfig.targetDeviceAddress,
         )
         localConfigStore.save(local)
         return local.toGatewayConfig()
@@ -29,7 +32,16 @@ class PhoneGatewayConfigState(
             deviceId = config.deviceId,
             authToken = config.authToken,
             relayBaseUrl = config.relayBaseUrl,
+            reconnectDelayMs = config.reconnectDelayMs,
         )
+    }
+
+    private fun normalizeReconnectDelayMs(value: Long): Long {
+        require(PhoneLocalConfig.isValidReconnectDelayMs(value)) {
+            "reconnectDelayMs must be positive"
+        }
+
+        return value
     }
 
     private fun PhoneLocalConfig.toGatewayConfig(): PhoneGatewayConfig {

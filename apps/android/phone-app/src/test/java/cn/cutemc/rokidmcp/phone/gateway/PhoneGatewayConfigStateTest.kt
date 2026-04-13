@@ -84,4 +84,34 @@ class PhoneGatewayConfigStateTest {
 
         assertEquals(saved, state.load())
     }
+
+    @Test
+    fun `update preserves persisted target device address`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = context.getSharedPreferences("gateway_config_state_target", Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+        val store = PhoneLocalConfigStore(prefs)
+        store.save(
+            PhoneLocalConfig(
+                deviceId = "phone-ab12cd34",
+                authToken = "token-123",
+                relayBaseUrl = "https://relay.example.com",
+                reconnectDelayMs = 9_000L,
+                targetDeviceAddress = "AA:BB:CC:DD:EE:FF",
+            ),
+        )
+        val state = PhoneGatewayConfigState(
+            localConfigStore = store,
+            gatewayAppVersion = "1.0",
+        )
+
+        state.update(
+            deviceId = "phone-deadbeef",
+            authToken = "token-456",
+            relayBaseUrl = "https://relay.example.org",
+            reconnectDelayMs = 10_000L,
+        )
+
+        assertEquals("AA:BB:CC:DD:EE:FF", store.load().targetDeviceAddress)
+    }
 }
