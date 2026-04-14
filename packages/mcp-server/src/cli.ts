@@ -1,5 +1,8 @@
 import type { McpEnv } from "./config/env.js";
 
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { readMcpEnv } from "./config/env.js";
 import { startStdioServer } from "./stdio.js";
 
@@ -12,6 +15,11 @@ export type StdioCliDependencies = {
   startServer?: typeof startStdioServer;
   logger?: StartupLogger;
   exit?: (code: number) => void;
+};
+
+type MainModuleMeta = {
+  url: string;
+  main?: boolean;
 };
 
 function formatStartupError(error: unknown): string {
@@ -29,6 +37,24 @@ function createStderrLogger(stderr: Pick<NodeJS.WriteStream, "write"> = process.
       stderr.write(`${message}${details}\n`);
     },
   };
+}
+
+function normalizeModulePath(path: string): string {
+  const resolvedPath = resolve(path);
+  return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+}
+
+export function isMainModule(meta: MainModuleMeta, argv: readonly string[] = process.argv): boolean {
+  if (meta.main !== undefined) {
+    return meta.main;
+  }
+
+  const entryPath = argv[1];
+  if (!entryPath) {
+    return false;
+  }
+
+  return normalizeModulePath(fileURLToPath(meta.url)) === normalizeModulePath(entryPath);
 }
 
 export async function runStdioServerCli(deps: StdioCliDependencies = {}): Promise<void> {
@@ -50,6 +76,6 @@ export async function runStdioServerCli(deps: StdioCliDependencies = {}): Promis
   }
 }
 
-if (import.meta.main) {
+if (isMainModule(import.meta)) {
   await runStdioServerCli();
 }
