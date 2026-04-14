@@ -1,16 +1,23 @@
 import { spawn } from "node:child_process";
+import { extname } from "node:path";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, test } from "bun:test";
 
-import { runStdioServerCli } from "./cli.js";
+import { isMainModule, runStdioServerCli } from "./cli.js";
 
 type SpawnResult = {
   exitCode: number | null;
   stderr: string;
   stdout: string;
 };
+
+const currentModuleExtension = extname(fileURLToPath(import.meta.url));
+
+function toLocalModuleUrl(moduleName: string): string {
+  return pathToFileURL(join(import.meta.dir, `${moduleName}${currentModuleExtension}`)).href;
+}
 
 function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
@@ -46,7 +53,58 @@ function runNodeProcess(args: string[], env: NodeJS.ProcessEnv = process.env): P
   return runProcess("node", args, env);
 }
 
+async function ensureBuiltCliIsCurrent(): Promise<void> {
+  if (currentModuleExtension !== ".ts") {
+    return;
+  }
+
+  const buildResult = await runBunProcess(["run", "build"]);
+  if (buildResult.exitCode !== 0) {
+    throw new Error(`Failed to build @rokid-mcp/mcp-server before CLI test: ${buildResult.stderr || buildResult.stdout}`);
+  }
+}
+
 describe("runStdioServerCli", () => {
+  test("falls back to argv-based main detection when import.meta.main is unavailable", () => {
+    const cliEntryPath = join(import.meta.dir, "..", "dist", "cli.js");
+    const unrelatedEntryPath = join(import.meta.dir, "..", "dist", "server.js");
+    const cliEntryUrl = pathToFileURL(cliEntryPath).href;
+
+    expect(
+      isMainModule(
+        { url: cliEntryUrl },
+        ["node", cliEntryPath],
+      ),
+    ).toBe(true);
+
+    expect(
+      isMainModule(
+        { url: cliEntryUrl },
+        ["node", unrelatedEntryPath],
+      ),
+    ).toBe(false);
+  });
+
+  test("prefers explicit import.meta.main when the runtime provides it", () => {
+    const cliEntryPath = join(import.meta.dir, "..", "dist", "cli.js");
+    const unrelatedEntryPath = join(import.meta.dir, "..", "dist", "server.js");
+    const cliEntryUrl = pathToFileURL(cliEntryPath).href;
+
+    expect(
+      isMainModule(
+        { main: true, url: cliEntryUrl },
+        ["node", unrelatedEntryPath],
+      ),
+    ).toBe(true);
+
+    expect(
+      isMainModule(
+        { main: false, url: cliEntryUrl },
+        ["node", cliEntryPath],
+      ),
+    ).toBe(false);
+  });
+
   test("delegates validated env to the reusable stdio runtime", async () => {
     const env = {
       relayBaseUrl: "https://relay.example.com",
@@ -81,7 +139,7 @@ describe("runStdioServerCli", () => {
   });
 
   test("importing stdio.ts does not trigger startup side effects", async () => {
-    const stdioModuleUrl = pathToFileURL(join(import.meta.dir, "stdio.ts")).href;
+    const stdioModuleUrl = toLocalModuleUrl("stdio");
     const env = { ...process.env };
 
     delete env.RELAY_BASE_URL;
@@ -98,7 +156,7 @@ describe("runStdioServerCli", () => {
   });
 
   test("startup with injected mocks does not pollute stdout", async () => {
-    const cliModuleUrl = pathToFileURL(join(import.meta.dir, "cli.ts")).href;
+    const cliModuleUrl = toLocalModuleUrl("cli");
 
     const result = await runBunProcess([
       "--eval",
@@ -132,7 +190,7 @@ describe("runStdioServerCli", () => {
   });
 
   test("source CLI runtime exits non-zero and writes to stderr when startup fails", async () => {
-    const cliModuleUrl = pathToFileURL(join(import.meta.dir, "cli.ts")).href;
+    const cliModuleUrl = toLocalModuleUrl("cli");
 
     const result = await runBunProcess([
       "--eval",
@@ -153,6 +211,8 @@ describe("runStdioServerCli", () => {
   });
 
   test("built CLI exits non-zero and keeps stdout clean when env is missing", async () => {
+    await ensureBuiltCliIsCurrent();
+
     const builtCliEntryPath = join(import.meta.dir, "..", "dist", "cli.js");
     const env = { ...process.env };
 
