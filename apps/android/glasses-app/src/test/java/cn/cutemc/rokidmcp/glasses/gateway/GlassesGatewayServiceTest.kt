@@ -4,6 +4,7 @@ import android.util.Log
 import cn.cutemc.rokidmcp.glasses.GlassesApp
 import cn.cutemc.rokidmcp.glasses.camera.CameraAdapter
 import cn.cutemc.rokidmcp.glasses.camera.CameraCapture
+import cn.cutemc.rokidmcp.glasses.logging.CapturingTimberTree
 import cn.cutemc.rokidmcp.glasses.logging.assertLog
 import cn.cutemc.rokidmcp.glasses.logging.assertNoSensitiveData
 import cn.cutemc.rokidmcp.glasses.logging.captureTimberLogs
@@ -21,9 +22,9 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import timber.log.Timber
 
 class GlassesGatewayServiceTest {
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -124,9 +125,12 @@ class GlassesGatewayServiceTest {
             },
         )
 
-        val logs = captureTimberLogs {
-            assertThrows(IllegalStateException::class.java) {
-                runBlocking { startActiveGlassesGatewayComposition(composition) }
+        val logs = captureLogs {
+            try {
+                startActiveGlassesGatewayComposition(composition)
+                throw AssertionError("Expected startup to fail when transport.start throws")
+            } catch (error: IllegalStateException) {
+                assertEquals("rfcomm start failed", error.message)
             }
         }
 
@@ -137,5 +141,17 @@ class GlassesGatewayServiceTest {
         logs.assertLog(Log.INFO, "glasses-controller", "controller start")
         logs.assertLog(Log.WARN, "glasses-controller", "runtime disconnected")
         logs.assertNoSensitiveData()
+    }
+
+    private suspend fun captureLogs(block: suspend () -> Unit): List<CapturingTimberTree.LogEntry> {
+        val tree = CapturingTimberTree()
+        Timber.plant(tree)
+
+        return try {
+            block()
+            tree.logs
+        } finally {
+            Timber.uproot(tree)
+        }
     }
 }

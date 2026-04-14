@@ -33,7 +33,7 @@ class ImageChunkSenderTest {
                 sender.send(
                     requestId = "req_capture_1",
                     transferId = "trf_capture_1",
-                    imageBytes = imageBytes,
+                    imageData = imageBytes,
                     width = 800,
                     height = 600,
                     sha256 = "sha256-test",
@@ -98,7 +98,7 @@ class ImageChunkSenderTest {
                     sender.send(
                         requestId = "req_capture_2",
                         transferId = "trf_capture_2",
-                        imageBytes = "abcdefghij".encodeToByteArray(),
+                        imageData = "abcdefghij".encodeToByteArray(),
                         width = 800,
                         height = 600,
                         sha256 = "sha256-test",
@@ -128,7 +128,7 @@ class ImageChunkSenderTest {
                 sender.send(
                     requestId = "req_capture_redaction",
                     transferId = "trf_capture_redaction",
-                    imageBytes = "imageBytes chunkBytes authToken".encodeToByteArray(),
+                    imageData = "imageBytes chunkBytes authToken".encodeToByteArray(),
                     width = 320,
                     height = 240,
                     sha256 = "sha256-redaction",

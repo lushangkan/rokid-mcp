@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
+import cn.cutemc.rokidmcp.phone.PhoneApp
 import cn.cutemc.rokidmcp.phone.logging.assertLog
 import cn.cutemc.rokidmcp.phone.logging.captureTimberLogs
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -17,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [Build.VERSION_CODES.S])
+@Config(application = PhoneApp::class, sdk = [36])
 class PhoneGatewayServiceTest {
     @Test
     fun `extracts runtime config from explicit extras`() {

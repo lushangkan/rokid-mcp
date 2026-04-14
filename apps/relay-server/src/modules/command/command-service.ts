@@ -637,7 +637,7 @@ export class CommandService {
       return {
         ...nextImage,
         status: uploadedImageState?.status ?? "UPLOADED",
-        uploadedAt: uploadedImageState?.uploadedAt ?? payload.image.uploadedAt,
+        uploadedAt: uploadedImageState?.uploadedAt ?? payload.image.uploadedAt ?? undefined,
         sha256: uploadedImageState?.sha256 ?? payload.image.sha256,
         size: uploadedImageState?.size ?? nextImage.size,
         mimeType: uploadedImageState?.mimeType ?? nextImage.mimeType,

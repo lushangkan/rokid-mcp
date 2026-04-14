@@ -460,6 +460,61 @@ class RfcommServerTransportTest {
     }
 
     @Test
+    fun `android bluetooth read ret minus one timeout exception is treated as disconnect`() {
+        val serverSocket = FakeServerSocket()
+        val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = AndroidRfcommServerTransport(
+            permissionChecker = { true },
+            adapterProvider = { FakeRfcommBluetoothAdapter(serverSocket) },
+            ioDispatcher = Dispatchers.IO,
+            transportScope = transportScope,
+            codec = codec,
+        )
+        val clientInput = ControlledInputStream()
+        val client = FakeClientSocket(
+            remoteDevice = RfcommRemoteDeviceInfo(
+                address = "12:34:56:78:9A:BC",
+                bondState = BluetoothDevice.BOND_BONDED,
+            ),
+            input = clientInput,
+            output = RecordingOutputStream(),
+        )
+        val events = CopyOnWriteArrayList<GlassesTransportEvent>()
+        val eventJob = transportScope.launch {
+            transport.events.collect { events += it }
+        }
+
+        val logs = captureTimberLogs { tree ->
+            serverSocket.enqueueAcceptedClient(client)
+
+            runBlocking { transport.start() }
+
+            waitUntil("bonded client attach") {
+                transport.state.value == GlassesTransportState.CONNECTED &&
+                    tree.logs.any { entry -> entry.message.contains("state -> CONNECTED") }
+            }
+
+            clientInput.fail(IOException("read failed, socket might closed or timeout, read ret: -1"))
+
+            waitUntil("client disconnect after bluetooth timeout close") {
+                transport.state.value == GlassesTransportState.LISTENING &&
+                    events.any { it is GlassesTransportEvent.ConnectionClosed } &&
+                    tree.logs.any { entry -> entry.message.contains("RFCOMM client disconnected") }
+            }
+
+            runBlocking { transport.stop("test-stop") }
+        }
+
+        transportScope.cancel()
+        runBlocking { eventJob.join() }
+
+        assertTrue(events.none { it is GlassesTransportEvent.Failure })
+        logs.assertLog(Log.DEBUG, RFCOMM_SERVER_TAG, "RFCOMM client disconnected")
+        assertTrue(logs.none { entry -> entry.message.contains("RFCOMM server client connection failed") })
+        assertTrue(logs.none { entry -> entry.message.contains("state -> ERROR") })
+    }
+
+    @Test
     fun `stop while accept is blocked stays disconnected without error`() {
         val serverSocket = FakeServerSocket()
         val transportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

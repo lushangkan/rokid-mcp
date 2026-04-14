@@ -39,16 +39,16 @@ class ImageChunkSender(
     suspend fun send(
         requestId: String,
         transferId: String,
-        imageBytes: ByteArray,
+        imageData: ByteArray,
         width: Int,
         height: Int,
         sha256: String,
     ) {
         requireRequestMetadata(requestId, transferId)
-        requireImageMetadata(imageBytes, width, height)
+        requireImageMetadata(imageData, width, height)
 
         Timber.tag(IMAGE_CHUNK_TAG).i(
-            "image transfer start requestId=$requestId transferId=$transferId totalBytes=${imageBytes.size} width=$width height=$height",
+            "image transfer start requestId=$requestId transferId=$transferId totalBytes=${imageData.size} width=$width height=$height",
         )
 
         sendFrame(
@@ -60,7 +60,7 @@ class ImageChunkSender(
                 payload = ChunkStart(
                     action = CommandAction.CAPTURE_PHOTO,
                     mediaType = LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG,
-                    totalSize = imageBytes.size.toLong(),
+                    totalSize = imageData.size.toLong(),
                     width = width,
                     height = height,
                     sha256 = sha256,
@@ -70,9 +70,9 @@ class ImageChunkSender(
 
         var index = 0
         var offset = 0
-        while (offset < imageBytes.size) {
-            val nextOffset = min(offset + chunkSizeBytes, imageBytes.size)
-            val chunkBytes = imageBytes.copyOfRange(offset, nextOffset)
+        while (offset < imageData.size) {
+            val nextOffset = min(offset + chunkSizeBytes, imageData.size)
+            val chunkPayload = imageData.copyOfRange(offset, nextOffset)
             sendFrame(
                 LocalFrameHeader(
                     type = LocalMessageType.CHUNK_DATA,
@@ -83,14 +83,14 @@ class ImageChunkSender(
                         action = CommandAction.CAPTURE_PHOTO,
                         index = index,
                         offset = offset.toLong(),
-                        size = chunkBytes.size,
-                        chunkChecksum = LocalProtocolChecksums.crc32(chunkBytes),
+                        size = chunkPayload.size,
+                        chunkChecksum = LocalProtocolChecksums.crc32(chunkPayload),
                     ),
                 ),
-                chunkBytes,
+                chunkPayload,
             )
             Timber.tag(IMAGE_CHUNK_TAG).v(
-                "image chunk progress requestId=$requestId transferId=$transferId index=$index offset=$offset size=${chunkBytes.size} sentBytes=$nextOffset totalBytes=${imageBytes.size}",
+                "image chunk progress requestId=$requestId transferId=$transferId index=$index offset=$offset size=${chunkPayload.size} sentBytes=$nextOffset totalBytes=${imageData.size}",
             )
             offset = nextOffset
             index += 1
@@ -105,13 +105,13 @@ class ImageChunkSender(
                 payload = ChunkEnd(
                     action = CommandAction.CAPTURE_PHOTO,
                     totalChunks = index,
-                    totalSize = imageBytes.size.toLong(),
+                    totalSize = imageData.size.toLong(),
                     sha256 = sha256,
                 ),
             ),
         )
         Timber.tag(IMAGE_CHUNK_TAG).i(
-            "image transfer complete requestId=$requestId transferId=$transferId totalChunks=$index totalBytes=${imageBytes.size}",
+            "image transfer complete requestId=$requestId transferId=$transferId totalChunks=$index totalBytes=${imageData.size}",
         )
     }
 
@@ -130,8 +130,8 @@ class ImageChunkSender(
         }
     }
 
-    private fun requireImageMetadata(imageBytes: ByteArray, width: Int, height: Int) {
-        if (imageBytes.isEmpty()) {
+    private fun requireImageMetadata(imageData: ByteArray, width: Int, height: Int) {
+        if (imageData.isEmpty()) {
             throw ImageChunkSenderException(
                 code = LocalProtocolErrorCodes.PROTOCOL_INVALID_PAYLOAD,
                 message = "captured image bytes must not be empty",
@@ -143,7 +143,7 @@ class ImageChunkSender(
                 message = "captured image dimensions must be positive",
             )
         }
-        if (imageBytes.size.toLong() > LocalProtocolConstants.MAX_IMAGE_SIZE_BYTES) {
+        if (imageData.size.toLong() > LocalProtocolConstants.MAX_IMAGE_SIZE_BYTES) {
             throw ImageChunkSenderException(
                 code = LocalProtocolErrorCodes.IMAGE_TOO_LARGE,
                 message = "captured image exceeds protocol maximum size",

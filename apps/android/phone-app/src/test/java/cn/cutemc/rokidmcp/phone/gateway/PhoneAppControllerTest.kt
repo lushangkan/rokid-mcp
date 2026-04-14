@@ -76,9 +76,10 @@ class PhoneAppControllerTest {
         assertEquals(GatewayRunState.ERROR, controller.runState.value)
         assertEquals("PHONE_CONFIG_INCOMPLETE", runtimeStore.snapshot.value.lastErrorCode)
         assertTrue(logStore.entries.value.any { it.message.contains("missing relay config") })
-        assertEquals(1_717_171_800L, logStore.entries.value.single().timestampMs)
-        assertEquals(PhoneLogLevel.ERROR, logStore.entries.value.single().level)
-        assertEquals("controller", logStore.entries.value.single().tag)
+        val errorEntry = logStore.entries.value.single { it.message.contains("missing relay config") }
+        assertEquals(1_717_171_800L, errorEntry.timestampMs)
+        assertEquals(PhoneLogLevel.ERROR, errorEntry.level)
+        assertEquals("controller", errorEntry.tag)
         logs.assertLog(Log.INFO, "controller", "start requested target=")
         logs.assertLog(Log.ERROR, "controller", "missing relay config")
     }

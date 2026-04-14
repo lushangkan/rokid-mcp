@@ -33,17 +33,22 @@ class GlassesTimberSourceAuditTest {
 
 private fun resolveSourceRoot(vararg relativeSegments: String): Path {
     val cwd = Paths.get("").toAbsolutePath().normalize()
-    val direct = cwd.resolve(Paths.get(relativeSegments.first(), *relativeSegments.drop(1).toTypedArray()))
-    if (Files.exists(direct)) {
-        return direct
-    }
+    generateSequence(cwd) { current -> current.parent }
+        .forEach { base ->
+            val direct = base.resolve(Paths.get(relativeSegments.first(), *relativeSegments.drop(1).toTypedArray()))
+            if (Files.exists(direct)) {
+                return direct
+            }
 
-    val repoRelative = cwd.resolve(Paths.get("apps", "android", relativeSegments.first(), *relativeSegments.drop(1).toTypedArray()))
-    if (Files.exists(repoRelative)) {
-        return repoRelative
-    }
+            val repoRelative = base.resolve(
+                Paths.get("apps", "android", relativeSegments.first(), *relativeSegments.drop(1).toTypedArray()),
+            )
+            if (Files.exists(repoRelative)) {
+                return repoRelative
+            }
+        }
 
-    error("Could not resolve source root for ${relativeSegments.joinToString("/")}")
+    error("Could not resolve source root for ${relativeSegments.joinToString("/")} from $cwd")
 }
 
 private fun findUnsafeTimberCalls(sourceRoot: Path, forbiddenPatterns: List<String>): List<String> {

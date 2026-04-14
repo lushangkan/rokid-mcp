@@ -271,8 +271,8 @@ export const CommandStatusImageProgressSchema = Type.Object(
   {
     imageId: ImageIdSchema,
     transferId: TransferIdSchema,
-    uploadStartedAt: Type.Optional(TimestampSchema),
-    uploadedAt: Type.Optional(TimestampSchema),
+    uploadStartedAt: Type.Optional(Type.Union([TimestampSchema, Type.Null()])),
+    uploadedAt: Type.Optional(Type.Union([TimestampSchema, Type.Null()])),
     sha256: Type.Optional(Sha256Schema),
   },
   { additionalProperties: false },

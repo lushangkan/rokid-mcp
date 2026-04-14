@@ -34,10 +34,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import timber.log.Timber
 
 class GlassesLocalLinkSessionTest {
     private companion object {
@@ -260,6 +260,32 @@ class GlassesLocalLinkSessionTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `transport failure event requests local link recovery`() = runTest {
+        val transport = FakeRfcommServerTransport()
+        val recoveryRequests = mutableListOf<Pair<String, String>>()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_172_060L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_060L)),
+            onLocalLinkFailure = { reason, cause ->
+                recoveryRequests += reason to (cause.message ?: "unknown")
+            },
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(GlassesTransportEvent.Failure(IllegalStateException("rfcomm broken")))
+        runCurrent()
+
+        assertEquals(listOf("transport-failure" to "rfcomm broken"), recoveryRequests)
+
+        session.stop("test complete")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `transport connection closed event moves runtime state to disconnected`() = runTest {
         val runtimeStore = GlassesRuntimeStore()
         val controller = GlassesAppController(runtimeStore = runtimeStore)
@@ -350,8 +376,11 @@ class GlassesLocalLinkSessionTest {
             commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_320L)),
         )
 
-        assertThrows(IllegalStateException::class.java) {
-            kotlinx.coroutines.runBlocking { session.start() }
+        try {
+            session.start()
+            fail("Expected start to fail when transport.start throws")
+        } catch (error: IllegalStateException) {
+            assertEquals("rfcomm start failed", error.message)
         }
         runCurrent()
 
@@ -447,6 +476,47 @@ class GlassesLocalLinkSessionTest {
 
         logs.assertLog(Log.WARN, LOG_TAG, "failed to send hello_ack frame")
         logs.assertNoSensitiveData()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `hello ack send failure requests local link recovery`() = runTest {
+        val transport = FakeRfcommServerTransport().apply {
+            sendFailure = IllegalStateException("ack send failed")
+        }
+        val recoveryRequests = mutableListOf<Pair<String, String>>()
+        val session = GlassesLocalLinkSession(
+            transport = transport,
+            controller = GlassesAppController(GlassesRuntimeStore()),
+            clock = FakeClock(1_717_172_345L),
+            sessionScope = backgroundScope,
+            commandDispatcher = testCommandDispatcher(backgroundScope, transport, FakeClock(1_717_172_345L)),
+            onLocalLinkFailure = { reason, cause ->
+                recoveryRequests += reason to (cause.message ?: "unknown")
+            },
+        )
+
+        session.start()
+        runCurrent()
+        transport.emit(
+            GlassesTransportEvent.FrameReceived(
+                LocalFrameHeader(
+                    type = LocalMessageType.HELLO,
+                    timestamp = 1_717_172_346L,
+                    payload = HelloPayload(
+                        role = LinkRole.PHONE,
+                        deviceId = "phone-device",
+                        appVersion = "1.0.0",
+                        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(listOf("frame-send-failed:hello_ack" to "ack send failed"), recoveryRequests)
+
+        session.stop("test complete")
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -717,10 +787,15 @@ class GlassesLocalLinkSessionTest {
         frameSender = GlassesFrameSender(transport::send),
     )
 
-    private fun captureLogs(block: suspend () -> Unit): List<CapturingTimberTree.LogEntry> =
-        captureTimberLogs {
-            kotlinx.coroutines.runBlocking {
-                block()
-            }
+    private suspend fun captureLogs(block: suspend () -> Unit): List<CapturingTimberTree.LogEntry> {
+        val tree = CapturingTimberTree()
+        Timber.plant(tree)
+
+        return try {
+            block()
+            tree.logs
+        } finally {
+            Timber.uproot(tree)
         }
+    }
 }

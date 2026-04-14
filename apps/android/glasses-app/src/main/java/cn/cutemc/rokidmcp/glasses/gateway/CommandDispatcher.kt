@@ -20,6 +20,7 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
@@ -86,8 +87,9 @@ class CommandDispatcher(
     }
 
     suspend fun stop() {
-        activeCommandJob?.cancel()
+        val activeJob = activeCommandJob
         activeCommandJob = null
+        activeJob?.cancelAndJoin()
         exclusiveGuard.currentRequestId()?.let(exclusiveGuard::release)
     }
 

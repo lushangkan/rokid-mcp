@@ -175,7 +175,6 @@ class PhoneAppController(
                             lastErrorMessage = event.cause.message ?: "transport failure",
                         )
                         runtimeStore.replace(next)
-                        scheduleFullReconnect("transport failure: ${event.cause.message}")
                     }
                     is PhoneTransportEvent.ConnectionClosed -> {
                         setRunState(GatewayRunState.STOPPED)
@@ -190,7 +189,6 @@ class PhoneAppController(
                             lastErrorMessage = null,
                         )
                         runtimeStore.replace(next)
-                        scheduleFullReconnect("transport closed")
                     }
                     is PhoneTransportEvent.BytesReceived -> Unit
                 }
@@ -332,7 +330,6 @@ class PhoneAppController(
                 )
                 runtimeStore.replace(next)
                 reportIfNeeded(next)
-                scheduleFullReconnect("session failed: ${event.code}")
             }
 
             is PhoneLocalSessionEvent.FrameReceived -> {
@@ -440,31 +437,6 @@ class PhoneAppController(
             }
             Timber.tag("controller").i("executing scheduled relay reconnect")
             relaySessionClient?.connect()
-        }
-    }
-
-    private fun scheduleFullReconnect(reason: String) {
-        if (reconnectSuppressed) {
-            Timber.tag("controller").i("skipping full reconnect because reconnect is suppressed")
-            return
-        }
-        val target = lastStartTargetDeviceAddress ?: return
-        val config = lastEffectiveConfig ?: return
-        val delayMs = config.reconnectDelayMs
-
-        pendingReconnectJob?.cancel()
-
-        Timber.tag("controller").i("scheduling full reconnect in ${delayMs}ms due to: $reason")
-
-        pendingReconnectJob = controllerScope.launch {
-            delay(delayMs)
-            pendingReconnectJob = null
-            if (reconnectSuppressed) {
-                Timber.tag("controller").i("dropping scheduled full reconnect because reconnect is suppressed")
-                return@launch
-            }
-            Timber.tag("controller").i("executing scheduled full reconnect")
-            start(target, config)
         }
     }
 

@@ -515,6 +515,7 @@ export function createDeviceWsController(options: DeviceWsHandlersOptions): Devi
         logger.error("device websocket message rejected", {
           socketId: ws.data.socketId,
           closeCode: parsed.closeCode,
+          data: JSON.stringify(raw),
           ...parsed.debugContext,
         });
         closeSocket(ws, parsed.closeCode);
