@@ -355,6 +355,34 @@ describe("relay ws schema", () => {
     expect(Value.Check(RelayDeviceInboundMessageSchema, status)).toBe(true);
   });
 
+  test("accepts capture_photo image progress with explicit null upload timestamps from Android serializer", () => {
+    const status = {
+      version: "1.0",
+      type: "command_status",
+      deviceId: "phone-fd296361",
+      requestId: "req_4979d40e_a041_4c1e_8c9d_e0bd995437b6",
+      sessionId: "ses_30180601_a729_4d56_b7d1_7b0ecdd20428",
+      timestamp: 1776075427084,
+      payload: {
+        action: "capture_photo",
+        status: "image_captured",
+        statusAt: 1776075426519,
+        detailCode: null,
+        detailMessage: null,
+        image: {
+          imageId: "img_bb12ee70_881b_404a_91c2_58dcd5c07652",
+          transferId: "trf_440b8d97_9f9b_4c9d_aa3b_8325ea5c7ffe",
+          uploadStartedAt: null,
+          uploadedAt: null,
+          sha256: "90434e8b1ec40f4aa051c986be1ab0d46647cd847c7ccb9398934db0a4f331e4",
+        },
+      },
+    };
+
+    expect(Value.Check(CommandStatusMessageSchema, status)).toBe(true);
+    expect(Value.Check(RelayDeviceInboundMessageSchema, status)).toBe(true);
+  });
+
   test("accepts relay command_cancel message", () => {
     const message = {
       version: "1.0",

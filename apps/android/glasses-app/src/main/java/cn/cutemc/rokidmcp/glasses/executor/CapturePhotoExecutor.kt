@@ -85,7 +85,7 @@ class CapturePhotoExecutor(
             imageChunkSender.send(
                 requestId = requestId,
                 transferId = command.transfer.transferId,
-                imageBytes = capture.bytes,
+                imageData = capture.bytes,
                 width = capture.width,
                 height = capture.height,
                 sha256 = sha256,

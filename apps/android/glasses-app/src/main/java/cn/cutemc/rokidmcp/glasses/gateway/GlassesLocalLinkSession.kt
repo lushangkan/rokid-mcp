@@ -12,11 +12,13 @@ import cn.cutemc.rokidmcp.share.protocol.local.LocalRuntimeState
 import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
 import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import timber.log.Timber
 
 class GlassesLocalLinkSession(
@@ -25,6 +27,7 @@ class GlassesLocalLinkSession(
     private val clock: Clock,
     private val sessionScope: CoroutineScope,
     private val commandDispatcher: CommandDispatcher,
+    private val onLocalLinkFailure: (reason: String, cause: Throwable) -> Unit = { _, _ -> },
 ) {
     private companion object {
         const val LOG_TAG = "glasses-session"
@@ -40,7 +43,7 @@ class GlassesLocalLinkSession(
         }
 
         Timber.tag(LOG_TAG).i("starting glasses local link session")
-        eventJob = sessionScope.launch {
+        eventJob = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
             transport.events.collect { event ->
                 when (event) {
                     is GlassesTransportEvent.StateChanged -> {
@@ -63,6 +66,7 @@ class GlassesLocalLinkSession(
                     is GlassesTransportEvent.Failure -> {
                         Timber.tag(LOG_TAG).e(event.cause, "glasses transport failure")
                         controller.markFailure(event.cause.message ?: "transport failure")
+                        onLocalLinkFailure("transport-failure", event.cause)
                     }
                     is GlassesTransportEvent.ConnectionClosed -> {
                         Timber.tag(LOG_TAG).i("glasses transport disconnected reason=%s", event.reason ?: "unknown")
@@ -90,6 +94,7 @@ class GlassesLocalLinkSession(
         Timber.tag(LOG_TAG).i("stopping glasses local link session reason=%s", reason)
         try {
             transport.stop(reason)
+            yield()
         } finally {
             commandDispatcher.stop()
             controller.markDisconnected()
@@ -182,6 +187,7 @@ class GlassesLocalLinkSession(
         } catch (error: Throwable) {
             Timber.tag(LOG_TAG).w(error, "failed to send %s frame", frameName)
             controller.markFailure(error.message ?: "failed to send $frameName frame")
+            onLocalLinkFailure("frame-send-failed:$frameName", error)
             false
         }
     }

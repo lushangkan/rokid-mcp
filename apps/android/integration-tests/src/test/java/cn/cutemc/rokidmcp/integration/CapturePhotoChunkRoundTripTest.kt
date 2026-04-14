@@ -65,7 +65,7 @@ class CapturePhotoChunkRoundTripTest {
         sender.send(
             requestId = "req_capture_round_trip",
             transferId = "trf_capture_round_trip",
-            imageBytes = imageBytes,
+            imageData = imageBytes,
             width = 1024,
             height = 768,
             sha256 = ChecksumCalculator().sha256(imageBytes),

@@ -510,9 +510,11 @@ private fun IOException.isSocketClosedAfterRemoteDisconnect(): Boolean {
     return generateSequence<Throwable>(this) { it.cause }
         .mapNotNull { it.message?.lowercase() }
         .any { message ->
-            "read return: -1" in message && (
+            val readReturnedMinusOne = "read return: -1" in message || "read ret: -1" in message
+            readReturnedMinusOne && (
                 "bt socket closed" in message ||
-                    "socket closed" in message
+                    "socket closed" in message ||
+                    "socket might closed" in message
             )
         }
 }
