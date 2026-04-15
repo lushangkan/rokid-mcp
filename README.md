@@ -199,3 +199,7 @@ bun run spec:generate
 - Commit 格式：`feat:` / `fix:` / `docs:` / `style:` / `refactor:` / `test:` / `chore:`
 - 协议变更必须先改 `specs/`，再运行生成流程同步到 TS / Kotlin
 - 公共 API、状态拥有者、协议边界处请添加 doc comment
+
+## 许可证
+
+本项目采用 [GNU General Public License v3.0](./LICENSE)（`GPL-3.0-only`）。
