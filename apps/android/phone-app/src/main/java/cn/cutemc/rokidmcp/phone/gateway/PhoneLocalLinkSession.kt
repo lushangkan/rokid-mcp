@@ -1,15 +1,18 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
-import cn.cutemc.rokidmcp.share.protocol.DecodedFrame
-import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
-import cn.cutemc.rokidmcp.share.protocol.HelloPayload
-import cn.cutemc.rokidmcp.share.protocol.LinkRole
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
-import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
-import cn.cutemc.rokidmcp.share.protocol.LocalProtocolConstants
-import cn.cutemc.rokidmcp.share.protocol.PingPayload
-import cn.cutemc.rokidmcp.share.protocol.PongPayload
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolConstants
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolErrorCodes
+import cn.cutemc.rokidmcp.share.protocol.local.DecodedFrame
+import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.local.HelloPayload
+import cn.cutemc.rokidmcp.share.protocol.local.IncrementalFrameExtractor
+import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
+import cn.cutemc.rokidmcp.share.protocol.local.PingPayload
+import cn.cutemc.rokidmcp.share.protocol.local.PongPayload
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -19,11 +22,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 data class PhoneHelloConfig(
     val deviceId: String,
     val appVersion: String,
-    val supportedActions: List<cn.cutemc.rokidmcp.share.protocol.LocalAction>,
+    val supportedActions: List<CommandAction>,
 )
 
 sealed interface PhoneLocalSessionEvent {
@@ -43,6 +47,11 @@ sealed interface PhoneLocalSessionEvent {
         val code: String,
         val message: String,
     ) : PhoneLocalSessionEvent
+
+    data class FrameReceived(
+        val header: LocalFrameHeader<*>,
+        val body: ByteArray?,
+    ) : PhoneLocalSessionEvent
 }
 
 open class PhoneLocalLinkSession(
@@ -52,6 +61,10 @@ open class PhoneLocalLinkSession(
     private val clock: Clock,
     private val sessionScope: CoroutineScope,
 ) {
+    private companion object {
+        const val LOG_TAG = "local-session"
+    }
+
     private data class PendingPong(
         val seq: Long,
         val nonce: String,
@@ -68,11 +81,14 @@ open class PhoneLocalLinkSession(
     private var nextPingSeq: Long = 1L
     private var waitingForPong: PendingPong? = null
     private var sessionReady = false
+    private val frameExtractor = IncrementalFrameExtractor()
 
     open suspend fun start(targetDeviceAddress: String) {
         if (eventJob?.isActive == true) {
             return
         }
+
+        Timber.tag(LOG_TAG).i("starting phone local link session")
 
         eventJob = sessionScope.launch {
             transport.events.collect { event ->
@@ -81,7 +97,7 @@ open class PhoneLocalLinkSession(
                     is PhoneTransportEvent.BytesReceived -> handleReceivedBytes(event.bytes)
                     is PhoneTransportEvent.Failure,
                     is PhoneTransportEvent.ConnectionClosed,
-                    -> clearSessionState()
+                    -> clearSessionState("transport closed or failed")
                 }
             }
         }
@@ -90,6 +106,7 @@ open class PhoneLocalLinkSession(
     }
 
     open suspend fun stop(reason: String) {
+        Timber.tag(LOG_TAG).i("stopping phone local link session: %s", reason)
         try {
             transport.stop(reason)
         } finally {
@@ -98,9 +115,15 @@ open class PhoneLocalLinkSession(
     }
 
     open suspend fun terminate(reason: String) {
-        clearSessionState()
+        Timber.tag(LOG_TAG).i("terminating phone local link session: %s", reason)
+        clearSessionState("terminate: $reason")
         eventJob?.cancelAndJoin()
         eventJob = null
+    }
+
+    open suspend fun sendFrame(header: LocalFrameHeader<*>, body: ByteArray? = null) {
+        check(sessionReady) { "local session is not ready" }
+        transport.send(codec.encode(header, body))
     }
 
     private suspend fun handleStateChanged(state: PhoneTransportState) {
@@ -110,31 +133,66 @@ open class PhoneLocalLinkSession(
 
         sessionReady = false
         waitingForPong = null
+        frameExtractor.reset()
+        Timber.tag(LOG_TAG).i("transport connected; sending HELLO")
         sendHello()
         scheduleHelloTimeout()
     }
 
     private suspend fun handleReceivedBytes(bytes: ByteArray) {
-        val frame = try {
-            codec.decode(bytes)
+        val extractedFrames = try {
+            frameExtractor.append(bytes)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            emitFailure(
-                code = "BLUETOOTH_PROTOCOL_ERROR",
-                message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
-            )
+            emitProtocolFailure(error)
             return
         }
 
-        handleFrame(frame)
+        for (frameBytes in extractedFrames) {
+            val frame = try {
+                codec.decode(frameBytes)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                emitProtocolFailure(error)
+                return
+            }
+
+            handleFrame(frame)
+        }
+    }
+
+    private suspend fun emitProtocolFailure(error: Exception) {
+        Timber.tag(LOG_TAG).e(error, "failed to decode local frame from glasses")
+        emitFailure(
+            code = LocalProtocolErrorCodes.BLUETOOTH_PROTOCOL_ERROR,
+            message = "failed to decode local frame: ${error.message ?: error.javaClass.simpleName}",
+        )
     }
 
     private suspend fun handleFrame(frame: DecodedFrame) {
         when (frame.header.type) {
-            LocalMessageType.HELLO_ACK -> handleHelloAck(frame.header.payload as? HelloAckPayload ?: return)
-            LocalMessageType.PONG -> handlePong(frame.header.payload as? PongPayload ?: return)
-            else -> Unit
+            LocalMessageType.HELLO_ACK -> {
+                Timber.tag(LOG_TAG).v("dispatching HELLO_ACK frame to handshake handler")
+                handleHelloAck(frame.header.payload as? HelloAckPayload ?: return)
+            }
+            LocalMessageType.PONG -> {
+                Timber.tag(LOG_TAG).v("dispatching PONG frame to keepalive handler")
+                handlePong(frame.header.payload as? PongPayload ?: return)
+            }
+            LocalMessageType.COMMAND_ACK,
+            LocalMessageType.COMMAND_STATUS,
+            LocalMessageType.COMMAND_RESULT,
+            LocalMessageType.COMMAND_ERROR,
+            LocalMessageType.CHUNK_START,
+            LocalMessageType.CHUNK_DATA,
+            LocalMessageType.CHUNK_END,
+            -> {
+                Timber.tag(LOG_TAG).v("dispatching ${frame.header.type} frame to session events")
+                internalEvents.emit(PhoneLocalSessionEvent.FrameReceived(frame.header, frame.body))
+            }
+            else -> Timber.tag(LOG_TAG).v("ignoring unsupported frame type=${frame.header.type}")
         }
     }
 
@@ -153,15 +211,26 @@ open class PhoneLocalLinkSession(
                 ),
             ),
         )
+        Timber.tag(LOG_TAG).i(
+            "sent HELLO with deviceId=%s appVersion=%s actions=%d",
+            helloConfig.deviceId,
+            helloConfig.appVersion,
+            helloConfig.supportedActions.size,
+        )
     }
 
     private fun scheduleHelloTimeout() {
         helloTimeoutJob?.cancel()
+        Timber.tag(LOG_TAG).i(
+            "armed HELLO_ACK timeout for %d ms",
+            LocalProtocolConstants.HELLO_ACK_TIMEOUT_MS,
+        )
         helloTimeoutJob = sessionScope.launch {
             delay(LocalProtocolConstants.HELLO_ACK_TIMEOUT_MS)
             if (!sessionReady) {
+                Timber.tag(LOG_TAG).w("timed out waiting for HELLO_ACK")
                 emitFailure(
-                    code = "BLUETOOTH_HELLO_TIMEOUT",
+                    code = LocalProtocolErrorCodes.BLUETOOTH_HELLO_TIMEOUT,
                     message = "hello ack not received in time",
                 )
             }
@@ -173,16 +242,23 @@ open class PhoneLocalLinkSession(
         helloTimeoutJob = null
 
         if (!ack.accepted) {
+            Timber.tag(LOG_TAG).w(
+                "HELLO_ACK rejected code=%s message=%s",
+                ack.error?.code ?: LocalProtocolErrorCodes.BLUETOOTH_HELLO_REJECTED,
+                ack.error?.message ?: "hello rejected",
+            )
             internalEvents.emit(
                 PhoneLocalSessionEvent.HelloRejected(
-                    code = ack.error?.code ?: "BLUETOOTH_HELLO_REJECTED",
+                    code = ack.error?.code ?: LocalProtocolErrorCodes.BLUETOOTH_HELLO_REJECTED,
                     message = ack.error?.message ?: "hello rejected",
                 ),
             )
             return
         }
 
+        Timber.tag(LOG_TAG).i("HELLO_ACK accepted for role=%s", ack.role)
         sessionReady = true
+        Timber.tag(LOG_TAG).i("local session ready")
         internalEvents.emit(PhoneLocalSessionEvent.SessionReady)
         startKeepaliveLoop()
     }
@@ -190,9 +266,16 @@ open class PhoneLocalLinkSession(
     private suspend fun handlePong(pong: PongPayload) {
         val pendingPong = waitingForPong
         if (!sessionReady || pendingPong?.seq != pong.seq || pendingPong.nonce != pong.nonce) {
+            Timber.tag(LOG_TAG).w(
+                "received unmatched PONG seq=%d nonce=%s while waiting=%s",
+                pong.seq,
+                pong.nonce,
+                pendingPong,
+            )
             return
         }
 
+        Timber.tag(LOG_TAG).v("received PONG seq=%d", pong.seq)
         waitingForPong = null
         pongTimeoutJob?.cancel()
         pongTimeoutJob = null
@@ -206,6 +289,7 @@ open class PhoneLocalLinkSession(
 
     private fun startKeepaliveLoop() {
         keepaliveJob?.cancel()
+        Timber.tag(LOG_TAG).i("starting keepalive loop")
         keepaliveJob = sessionScope.launch {
             while (true) {
                 delay(LocalProtocolConstants.PING_INTERVAL_MS)
@@ -225,6 +309,7 @@ open class PhoneLocalLinkSession(
             nonce = "ping-$seq",
         )
         waitingForPong = pendingPong
+        Timber.tag(LOG_TAG).v("sending PING seq=%d", pendingPong.seq)
         transport.send(
             codec.encode(
                 LocalFrameHeader(
@@ -242,21 +327,24 @@ open class PhoneLocalLinkSession(
 
     private fun armPongTimeout(expectedPong: PendingPong) {
         pongTimeoutJob?.cancel()
+        Timber.tag(LOG_TAG).v("armed PONG timeout for seq=%d", expectedPong.seq)
         pongTimeoutJob = sessionScope.launch {
             delay(LocalProtocolConstants.PONG_TIMEOUT_MS)
             if (waitingForPong != expectedPong) {
                 return@launch
             }
 
+            Timber.tag(LOG_TAG).w("timed out waiting for PONG seq=%d", expectedPong.seq)
             emitFailure(
-                code = "BLUETOOTH_PONG_TIMEOUT",
+                code = LocalProtocolErrorCodes.BLUETOOTH_PONG_TIMEOUT,
                 message = "pong not received in time",
             )
         }
     }
 
     private suspend fun emitFailure(code: String, message: String) {
-        clearSessionState()
+        Timber.tag(LOG_TAG).e("local session failed code=%s message=%s", code, message)
+        clearSessionState("failure: $code")
         internalEvents.emit(
             PhoneLocalSessionEvent.SessionFailed(
                 code = code,
@@ -265,13 +353,15 @@ open class PhoneLocalLinkSession(
         )
     }
 
-    private fun clearSessionState() {
+    private fun clearSessionState(reason: String) {
+        Timber.tag(LOG_TAG).i("clearing session state: %s", reason)
         helloTimeoutJob?.cancel()
         helloTimeoutJob = null
         keepaliveJob?.cancel()
         keepaliveJob = null
         pongTimeoutJob?.cancel()
         pongTimeoutJob = null
+        frameExtractor.reset()
         sessionReady = false
         waitingForPong = null
     }

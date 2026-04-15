@@ -16,7 +16,6 @@ describe("createGetDeviceStatusTool", () => {
               sessionState: "ONLINE",
               setupState: "INITIALIZED",
               runtimeState: "READY",
-              uplinkState: "ONLINE",
               capabilities: ["display_text"],
               activeCommandRequestId: null,
               lastErrorCode: null,

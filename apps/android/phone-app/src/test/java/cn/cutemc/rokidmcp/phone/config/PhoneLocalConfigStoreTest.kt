@@ -33,6 +33,15 @@ class PhoneLocalConfigStoreTest {
         assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
         assertNull(config.authToken)
         assertNull(config.relayBaseUrl)
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+        assertEquals(PhoneLocalConfig.DEFAULT_TARGET_DEVICE_ADDRESS, config.targetDeviceAddress)
+    }
+
+    @Test
+    fun `default config uses default reconnect delay`() {
+        val config = PhoneLocalConfig.default()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
     }
 
     @Test
@@ -41,12 +50,30 @@ class PhoneLocalConfigStoreTest {
             deviceId = "phone-1234abcd",
             authToken = "token-abc",
             relayBaseUrl = "https://relay.example.com",
+            reconnectDelayMs = 12_345L,
+            targetDeviceAddress = "aa:bb:cc:dd:ee:ff",
         )
 
         store.save(expected)
         val loaded = store.load()
 
-        assertEquals(expected, loaded)
+        assertEquals(
+            expected.copy(targetDeviceAddress = "AA:BB:CC:DD:EE:FF"),
+            loaded,
+        )
+    }
+
+    @Test
+    fun `save persists auth token under existing authToken key`() {
+        store.save(
+            PhoneLocalConfig(
+                deviceId = "phone-1234abcd",
+                authToken = "token-abc",
+                relayBaseUrl = "https://relay.example.com",
+            ),
+        )
+
+        assertEquals("token-abc", prefs.getString("authToken", null))
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -56,6 +83,18 @@ class PhoneLocalConfigStoreTest {
                 deviceId = "bad id",
                 authToken = null,
                 relayBaseUrl = null,
+            ),
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `save rejects invalid target device address`() {
+        store.save(
+            PhoneLocalConfig(
+                deviceId = "phone-1234abcd",
+                authToken = null,
+                relayBaseUrl = null,
+                targetDeviceAddress = "invalid-address",
             ),
         )
     }
@@ -74,6 +113,7 @@ class PhoneLocalConfigStoreTest {
         val config = store.load()
 
         assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
         val reloaded = store.load()
         assertEquals(config, reloaded)
     }
@@ -88,5 +128,60 @@ class PhoneLocalConfigStoreTest {
         val config = store.load()
 
         assertTrue(PhoneLocalConfig.isValidDeviceId(config.deviceId))
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+        assertEquals(PhoneLocalConfig.DEFAULT_TARGET_DEVICE_ADDRESS, config.targetDeviceAddress)
+    }
+
+    @Test
+    fun `load backfills default target device address when older config omits it`() {
+        prefs.edit()
+            .putString("deviceId", "phone-ab12cd34")
+            .putString("authToken", "token-abc")
+            .putString("relayBaseUrl", "https://relay.example.com")
+            .putLong("reconnectDelayMs", 7_000L)
+            .commit()
+
+        val config = store.load()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_TARGET_DEVICE_ADDRESS, config.targetDeviceAddress)
+        assertEquals(
+            PhoneLocalConfig.DEFAULT_TARGET_DEVICE_ADDRESS,
+            prefs.getString("targetDeviceAddress", null),
+        )
+    }
+
+    @Test
+    fun `load normalizes persisted target device address`() {
+        prefs.edit()
+            .putString("deviceId", "phone-ab12cd34")
+            .putString("targetDeviceAddress", " aa:bb:cc:dd:ee:ff ")
+            .commit()
+
+        val config = store.load()
+
+        assertEquals("AA:BB:CC:DD:EE:FF", config.targetDeviceAddress)
+        assertEquals("AA:BB:CC:DD:EE:FF", prefs.getString("targetDeviceAddress", null))
+    }
+
+    @Test
+    fun `load falls back to default reconnect delay when stored value is missing`() {
+        prefs.edit().putString("deviceId", "phone-ab12cd34").commit()
+
+        val config = store.load()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
+    }
+
+    @Test
+    fun `load falls back to default reconnect delay when stored value is invalid`() {
+        prefs.edit()
+            .putString("deviceId", "phone-ab12cd34").commit()
+        prefs.edit()
+            .putString("reconnectDelayMs", "NaN")
+            .commit()
+
+        val config = store.load()
+
+        assertEquals(PhoneLocalConfig.DEFAULT_RECONNECT_DELAY_MS, config.reconnectDelayMs)
     }
 }

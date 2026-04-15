@@ -21,7 +21,6 @@ describe("createRelayClient", () => {
             sessionState: "ONLINE",
             setupState: "INITIALIZED",
             runtimeState: "READY",
-            uplinkState: "ONLINE",
             capabilities: ["display_text"],
             activeCommandRequestId: null,
             lastErrorCode: null,
@@ -38,6 +37,7 @@ describe("createRelayClient", () => {
 
     const client = createRelayClient({
       relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-token",
       requestTimeoutMs: 3000,
     });
 
@@ -48,6 +48,9 @@ describe("createRelayClient", () => {
       "https://relay.example.com/api/v1/devices/rokid_glasses_01/status",
       expect.objectContaining({
         method: "GET",
+        headers: {
+          Authorization: "Bearer relay-token",
+        },
       }),
     );
   });
@@ -59,6 +62,7 @@ describe("createRelayClient", () => {
 
     const client = createRelayClient({
       relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-token",
       requestTimeoutMs: 3000,
     });
 
@@ -72,6 +76,7 @@ describe("createRelayClient", () => {
 
     const client = createRelayClient({
       relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-token",
       requestTimeoutMs: 3000,
     });
 
@@ -96,6 +101,7 @@ describe("createRelayClient", () => {
 
     const client = createRelayClient({
       relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-token",
       requestTimeoutMs: 3000,
     });
 
@@ -122,6 +128,7 @@ describe("createRelayClient", () => {
 
     const client = createRelayClient({
       relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-token",
       requestTimeoutMs: 3000,
     });
 
@@ -134,5 +141,34 @@ describe("createRelayClient", () => {
         code: "RELAY_DEVICE_NOT_FOUND",
       });
     }
+  });
+
+  test("passes through relay auth errors for protected status requests", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: "AUTH_HTTP_BEARER_INVALID",
+            message: "Authorization header must contain a valid bearer token.",
+            retryable: false,
+          },
+          timestamp: 1710000000001,
+        }),
+        { status: 401 },
+      ),
+    ) as unknown as typeof fetch;
+
+    const client = createRelayClient({
+      relayBaseUrl: "https://relay.example.com",
+      relayHttpAuthToken: "relay-token",
+      requestTimeoutMs: 3000,
+    });
+
+    await expect(client.getDeviceStatus({ deviceId: "rokid_glasses_01" })).rejects.toMatchObject({
+      code: "AUTH_HTTP_BEARER_INVALID",
+      message: "Authorization header must contain a valid bearer token.",
+      retryable: false,
+    });
   });
 });

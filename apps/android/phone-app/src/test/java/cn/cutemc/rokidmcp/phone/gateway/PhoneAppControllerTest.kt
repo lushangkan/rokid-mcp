@@ -1,14 +1,18 @@
 package cn.cutemc.rokidmcp.phone.gateway
 
+import android.util.Log
 import cn.cutemc.rokidmcp.phone.logging.PhoneLogLevel
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogStore
 import cn.cutemc.rokidmcp.phone.logging.PhoneUiLogTree
-import cn.cutemc.rokidmcp.share.protocol.DefaultLocalFrameCodec
-import cn.cutemc.rokidmcp.share.protocol.HelloAckPayload
-import cn.cutemc.rokidmcp.share.protocol.LinkRole
-import cn.cutemc.rokidmcp.share.protocol.LocalAction
-import cn.cutemc.rokidmcp.share.protocol.LocalFrameHeader
-import cn.cutemc.rokidmcp.share.protocol.LocalMessageType
+import cn.cutemc.rokidmcp.phone.logging.assertLog
+import cn.cutemc.rokidmcp.phone.logging.assertNoSensitiveData
+import cn.cutemc.rokidmcp.phone.logging.captureTimberLogs
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.local.DefaultLocalFrameCodec
+import cn.cutemc.rokidmcp.share.protocol.local.HelloAckPayload
+import cn.cutemc.rokidmcp.share.protocol.local.LinkRole
+import cn.cutemc.rokidmcp.share.protocol.local.LocalFrameHeader
+import cn.cutemc.rokidmcp.share.protocol.local.LocalMessageType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -65,14 +69,19 @@ class PhoneAppControllerTest {
             },
         )
 
-        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        val logs = captureTimberLogs {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        }
 
         assertEquals(GatewayRunState.ERROR, controller.runState.value)
         assertEquals("PHONE_CONFIG_INCOMPLETE", runtimeStore.snapshot.value.lastErrorCode)
         assertTrue(logStore.entries.value.any { it.message.contains("missing relay config") })
-        assertEquals(1_717_171_800L, logStore.entries.value.single().timestampMs)
-        assertEquals(PhoneLogLevel.ERROR, logStore.entries.value.single().level)
-        assertEquals("controller", logStore.entries.value.single().tag)
+        val errorEntry = logStore.entries.value.single { it.message.contains("missing relay config") }
+        assertEquals(1_717_171_800L, errorEntry.timestampMs)
+        assertEquals(PhoneLogLevel.ERROR, errorEntry.level)
+        assertEquals("controller", errorEntry.tag)
+        logs.assertLog(Log.INFO, "controller", "start requested target=")
+        logs.assertLog(Log.ERROR, "controller", "missing relay config")
     }
 
     @Test
@@ -121,6 +130,7 @@ class PhoneAppControllerTest {
                     authToken = "token",
                     relayBaseUrl = "https://relay.example.com",
                     appVersion = "1.0",
+                    reconnectDelayMs = 20_000L,
                 )
             },
             createTransport = {
@@ -341,6 +351,42 @@ class PhoneAppControllerTest {
         assertEquals(GatewayRunState.STOPPED, controller.runState.value)
         assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
         assertNull(runtimeStore.snapshot.value.lastErrorCode)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `manual stop suppresses reconnect scheduled by transport close`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        val logStore = PhoneUiLogStore(nowMs = { 1_717_171_800L })
+        val transport = FakeRfcommClientTransport()
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(logStore),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                    reconnectDelayMs = 2_500L,
+                )
+            },
+            createTransport = { transport },
+            controllerScope = backgroundScope,
+        )
+
+        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+        runCurrent()
+
+        controller.stop("manual")
+        runCurrent()
+        advanceTimeBy(2_500L)
+        runCurrent()
+
+        assertEquals(1, transport.startCount)
+        assertEquals(listOf("manual"), transport.stopReasons)
+        assertEquals(GatewayRunState.STOPPED, controller.runState.value)
+        assertEquals(PhoneRuntimeState.DISCONNECTED, runtimeStore.snapshot.value.runtimeState)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -609,7 +655,7 @@ class PhoneAppControllerTest {
             },
             clock = FakeClock(1_717_171_900L),
             controllerScope = backgroundScope,
-            supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+            supportedActions = listOf(CommandAction.DISPLAY_TEXT),
             createRelaySessionClient = { relaySessionClient },
         )
 
@@ -623,7 +669,7 @@ class PhoneAppControllerTest {
             PhoneHelloConfig(
                 deviceId = "phone-device",
                 appVersion = "1.2.3",
-                supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+                supportedActions = listOf(CommandAction.DISPLAY_TEXT),
             ),
             capturedHelloConfig,
         )
@@ -651,14 +697,14 @@ class PhoneAppControllerTest {
 
         advanceTimeBy(5_001L)
         runCurrent()
-        val ping = codec.decode(transport.sentBytes.last()).header.payload as cn.cutemc.rokidmcp.share.protocol.PingPayload
+        val ping = codec.decode(transport.sentBytes.last()).header.payload as cn.cutemc.rokidmcp.share.protocol.local.PingPayload
 
         transport.emitBytes(
             codec.encode(
                 LocalFrameHeader(
                     type = LocalMessageType.PONG,
                     timestamp = 1_717_171_902L,
-                    payload = cn.cutemc.rokidmcp.share.protocol.PongPayload(seq = ping.seq, nonce = ping.nonce),
+                    payload = cn.cutemc.rokidmcp.share.protocol.local.PongPayload(seq = ping.seq, nonce = ping.nonce),
                 ),
             ),
         )
@@ -701,52 +747,61 @@ class PhoneAppControllerTest {
             controllerScope = backgroundScope,
         )
 
-        controller.start(targetDeviceAddress = "00:11:22:33:44:55")
-        runCurrent()
-        relaySessionClient.onTextMessage(
-            """
-            {
-              "version":"1.0",
-              "type":"hello_ack",
-              "deviceId":"phone-device",
-              "timestamp":1717171901,
-              "payload":{
-                "sessionId":"ses_reporting",
-                "serverTime":1717171901,
-                "heartbeatIntervalMs":5000,
-                "heartbeatTimeoutMs":15000,
-                "limits":{
-                  "maxPendingCommands":1,
-                  "maxImageUploadSizeBytes":10485760,
-                  "acceptedImageContentTypes":["image/jpeg"]
+        val logs = captureTimberLogs {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+            runCurrent()
+            relaySessionClient.onTextMessage(
+                """
+                {
+                  "version":"1.0",
+                  "type":"hello_ack",
+                  "deviceId":"phone-device",
+                  "timestamp":1717171901,
+                  "payload":{
+                    "sessionId":"ses_reporting",
+                    "serverTime":1717171901,
+                    "heartbeatIntervalMs":5000,
+                    "heartbeatTimeoutMs":15000,
+                    "limits":{
+                      "maxPendingCommands":1,
+                      "maxImageUploadSizeBytes":10485760,
+                      "acceptedImageContentTypes":["image/jpeg"]
+                    }
+                  }
                 }
-              }
-            }
-            """.trimIndent(),
-        )
-        runCurrent()
+                """.trimIndent(),
+            )
+            runCurrent()
 
-        controller.applyTransportState(PhoneTransportState.CONNECTED)
-        runCurrent()
+            controller.applyTransportState(PhoneTransportState.CONNECTED)
+            runCurrent()
 
-        val stateUpdatesAfterConnected = webSocket.sentTexts.filter { it.contains("\"type\":\"phone_state_update\"") }
-        assertEquals(1, stateUpdatesAfterConnected.size)
-        assertTrue(stateUpdatesAfterConnected.last().contains("\"runtimeState\":\"${PhoneRuntimeState.CONNECTING.name}\""))
-        val baselineCount = stateUpdatesAfterConnected.size
+            val stateUpdatesAfterConnected = webSocket.sentTexts.filter { it.contains("\"type\":\"phone_state_update\"") }
+            assertEquals(1, stateUpdatesAfterConnected.size)
+            assertTrue(stateUpdatesAfterConnected.last().contains("\"runtimeState\":\"${PhoneRuntimeState.CONNECTING.name}\""))
+            val baselineCount = stateUpdatesAfterConnected.size
 
-        controller.handleLocalSessionEvent(PhoneLocalSessionEvent.PongReceived(seq = 1, receivedAt = 1_717_171_905L))
-        runCurrent()
-        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            controller.handleLocalSessionEvent(PhoneLocalSessionEvent.PongReceived(seq = 1, receivedAt = 1_717_171_905L))
+            runCurrent()
+            assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
 
-        runtimeStore.replace(runtimeStore.snapshot.value.copy(lastUpdatedAt = 123L))
-        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
-        runCurrent()
-        assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            runtimeStore.replace(runtimeStore.snapshot.value.copy(lastUpdatedAt = 123L))
+            controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+            runCurrent()
+            assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
 
-        runtimeStore.replace(runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_SAMPLE"))
-        controller.reportSnapshotForTest(runtimeStore.snapshot.value)
-        runCurrent()
-        assertEquals(baselineCount + 1, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+            runtimeStore.replace(runtimeStore.snapshot.value.copy(uplinkState = PhoneUplinkState.ONLINE))
+            controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+            runCurrent()
+            assertEquals(baselineCount, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+
+            runtimeStore.replace(runtimeStore.snapshot.value.copy(lastErrorCode = "ERR_SAMPLE"))
+            controller.reportSnapshotForTest(runtimeStore.snapshot.value)
+            runCurrent()
+            assertEquals(baselineCount + 1, webSocket.sentTexts.count { it.contains("\"type\":\"phone_state_update\"") })
+        }
+
+        logs.assertLog(Log.DEBUG, "controller", "reporting snapshot setup=")
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -845,6 +900,66 @@ class PhoneAppControllerTest {
         assertEquals("RELAY_SESSION_ERROR", runtimeStore.snapshot.value.lastErrorCode)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `relay auth close code 1008 keeps reconnect flow and redacts controller logs`() = runTest {
+        val runtimeStore = PhoneRuntimeStore()
+        var connectCalls = 0
+        var callbacks: RelayWebSocketCallbacks? = null
+        val relaySessionClient = RelaySessionClient(
+            runtimeStore = runtimeStore,
+            clock = FakeClock(1_717_171_900L),
+            config = PhoneGatewayConfig(
+                deviceId = "phone-device",
+                authToken = "token",
+                relayBaseUrl = "https://relay.example.com",
+                appVersion = "1.0",
+                reconnectDelayMs = 2_500L,
+            ),
+            controllerScope = backgroundScope,
+            webSocketFactory = RelayWebSocketFactory { _, nextCallbacks ->
+                callbacks = nextCallbacks
+                connectCalls += 1
+                FakeRelayWebSocket()
+            },
+        )
+        val controller = PhoneAppController(
+            runtimeStore = runtimeStore,
+            logStore = PhoneLogStore(PhoneUiLogStore(nowMs = { 1_717_171_800L })),
+            loadConfig = {
+                PhoneGatewayConfig(
+                    deviceId = "phone-device",
+                    authToken = "token",
+                    relayBaseUrl = "https://relay.example.com",
+                    appVersion = "1.0",
+                    reconnectDelayMs = 2_500L,
+                )
+            },
+            createTransport = { FakeRfcommClientTransport() },
+            createRelaySessionClient = { relaySessionClient },
+            controllerScope = backgroundScope,
+        )
+
+        val logs = captureTimberLogs {
+            controller.start(targetDeviceAddress = "00:11:22:33:44:55")
+            runCurrent()
+            callbacks!!.onClosed(1008, "authToken=auth-from-config Bearer bearer-secret uploadToken=upl_test_1")
+            runCurrent()
+            advanceTimeBy(2_500L)
+            runCurrent()
+        }
+
+        assertEquals(2, connectCalls)
+        logs.assertLog(Log.INFO, "controller", "scheduling relay reconnect in 2500ms due to: relay closed: 1008")
+        logs.assertLog(Log.INFO, "controller", "executing scheduled relay reconnect")
+        logs.assertNoSensitiveData()
+        assertFalse(logs.any { entry ->
+            entry.message.contains("auth-from-config") ||
+                entry.message.contains("bearer-secret") ||
+                entry.message.contains("upl_test_1")
+        })
+    }
+
     @Test
     fun `concurrent report requests only send one phone state update`() = runBlocking {
         val runtimeStore = PhoneRuntimeStore()
@@ -940,7 +1055,7 @@ private class RecordingSession(
     helloConfig = PhoneHelloConfig(
         deviceId = "phone-device",
         appVersion = "1.0",
-        supportedActions = listOf(LocalAction.DISPLAY_TEXT),
+        supportedActions = listOf(CommandAction.DISPLAY_TEXT),
     ),
     codec = DefaultLocalFrameCodec(),
     clock = FakeClock(1L),

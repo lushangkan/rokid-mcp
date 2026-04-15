@@ -1,9 +1,12 @@
-package cn.cutemc.rokidmcp.share.protocol
+package cn.cutemc.rokidmcp.share.protocol.local
 
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
 import org.junit.Test
+import kotlinx.serialization.SerializationException
 
 class LocalFrameCodecTest {
     private val codec = DefaultLocalFrameCodec()
@@ -17,7 +20,7 @@ class LocalFrameCodecTest {
                 payload = HelloPayload(
                     deviceId = "phone-1",
                     appVersion = "1.0.0",
-                    supportedActions = listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
+                    supportedActions = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
                 ),
             ),
         )
@@ -28,7 +31,7 @@ class LocalFrameCodecTest {
 
         assertEquals(LocalMessageType.HELLO, header.type)
         assertEquals("phone-1", header.payload.deviceId)
-        assertEquals(listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO), header.payload.supportedActions)
+        assertEquals(listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO), header.payload.supportedActions)
     }
 
     @Test
@@ -41,7 +44,7 @@ class LocalFrameCodecTest {
                 requestId = "req-1",
                 transferId = "tx-1",
                 timestamp = 1_717_171_718L,
-                payload = ChunkDataPayload(
+                payload = ChunkData(
                     index = 0,
                     offset = 0,
                     size = body.size,
@@ -53,7 +56,7 @@ class LocalFrameCodecTest {
 
         val decoded = codec.decode(encoded)
         @Suppress("UNCHECKED_CAST")
-        val header = decoded.header as LocalFrameHeader<ChunkDataPayload>
+        val header = decoded.header as LocalFrameHeader<ChunkData>
 
         assertEquals(LocalMessageType.CHUNK_DATA, header.type)
         assertEquals(5, header.payload.size)
@@ -72,7 +75,7 @@ class LocalFrameCodecTest {
                         model = "Rokid Max",
                         appVersion = "2.0.0",
                     ),
-                    capabilities = listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO),
+                    capabilities = listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO),
                     runtimeState = LocalRuntimeState.READY,
                 ),
             ),
@@ -86,7 +89,7 @@ class LocalFrameCodecTest {
         assertEquals(true, header.payload.accepted)
         assertEquals("Rokid Max", header.payload.glassesInfo?.model)
         assertEquals("2.0.0", header.payload.glassesInfo?.appVersion)
-        assertEquals(listOf(LocalAction.DISPLAY_TEXT, LocalAction.CAPTURE_PHOTO), header.payload.capabilities)
+        assertEquals(listOf(CommandAction.DISPLAY_TEXT, CommandAction.CAPTURE_PHOTO), header.payload.capabilities)
         assertEquals(LocalRuntimeState.READY, header.payload.runtimeState)
         assertNull(header.payload.error)
     }
@@ -152,15 +155,35 @@ class LocalFrameCodecTest {
         assertEquals("pong-nonce", header.payload.nonce)
     }
 
+    @Test
+    fun `local protocol json rejects unknown display text fields`() {
+        try {
+            LocalProtocolJson.default.decodeFromString(
+                DisplayTextCommand.serializer(),
+                """
+                {
+                  "action": "display_text",
+                  "timeoutMs": 30000,
+                  "params": {
+                    "text": "hello glasses",
+                    "durationMs": 3000,
+                    "style": "warning"
+                  }
+                }
+                """.trimIndent(),
+            )
+            fail("Expected unknown display_text fields to be rejected")
+        } catch (_: SerializationException) {
+        }
+    }
+
     @Test(expected = ProtocolCodecException::class)
     fun `encode rejects command status without request id`() {
         codec.encode(
             header = LocalFrameHeader(
                 type = LocalMessageType.COMMAND_STATUS,
                 timestamp = 1_717_171_724L,
-                payload = CommandStatusPayload(
-                    action = LocalAction.DISPLAY_TEXT,
-                    status = LocalCommandStatus.DISPLAYING,
+                payload = DisplayingCommandStatus(
                     statusAt = 1_717_171_724L,
                 ),
             ),
@@ -175,7 +198,7 @@ class LocalFrameCodecTest {
                 type = LocalMessageType.CHUNK_DATA,
                 requestId = "req-2",
                 timestamp = 1_717_171_725L,
-                payload = ChunkDataPayload(
+                payload = ChunkData(
                     index = 1,
                     offset = 3,
                     size = body.size,
@@ -195,7 +218,7 @@ class LocalFrameCodecTest {
                 requestId = "req-3",
                 transferId = "tx-3",
                 timestamp = 1_717_171_726L,
-                payload = ChunkDataPayload(
+                payload = ChunkData(
                     index = 2,
                     offset = 6,
                     size = body.size,

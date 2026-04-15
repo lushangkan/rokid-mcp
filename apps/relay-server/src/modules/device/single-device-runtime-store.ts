@@ -1,9 +1,8 @@
-import type { RuntimeState, UplinkState } from "@rokid-mcp/protocol";
+import type { RuntimeState } from "@rokid-mcp/protocol";
 
 export type CurrentRuntimeSnapshot = {
   deviceId: string;
   runtimeState: RuntimeState;
-  uplinkState: UplinkState;
   activeCommandRequestId: string | null;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;

@@ -1,5 +1,8 @@
-package cn.cutemc.rokidmcp.share.protocol
+package cn.cutemc.rokidmcp.share.protocol.local
 
+import cn.cutemc.rokidmcp.share.protocol.constants.CapturePhotoQuality
+import cn.cutemc.rokidmcp.share.protocol.constants.CommandAction
+import cn.cutemc.rokidmcp.share.protocol.constants.LocalProtocolConstants
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -44,15 +47,6 @@ enum class LocalMessageType {
 }
 
 @Serializable
-enum class LocalAction {
-    @SerialName("display_text")
-    DISPLAY_TEXT,
-
-    @SerialName("capture_photo")
-    CAPTURE_PHOTO,
-}
-
-@Serializable
 enum class LinkRole {
     @SerialName("PHONE")
     PHONE,
@@ -74,7 +68,7 @@ enum class LocalRuntimeState {
 }
 
 @Serializable
-enum class LocalCommandStatus {
+enum class LocalCommandProgress {
     @SerialName("executing")
     EXECUTING,
 
@@ -101,7 +95,7 @@ data class HelloPayload(
     val deviceId: String,
     val appVersion: String,
     val appBuild: String? = null,
-    val supportedActions: List<LocalAction>,
+    val supportedActions: List<CommandAction>,
 )
 
 @Serializable
@@ -109,7 +103,7 @@ data class HelloAckPayload(
     val accepted: Boolean,
     val role: LinkRole = LinkRole.GLASSES,
     val glassesInfo: GlassesInfo? = null,
-    val capabilities: List<LocalAction>? = null,
+    val capabilities: List<CommandAction>? = null,
     val runtimeState: LocalRuntimeState? = null,
     val error: HelloError? = null,
 )
@@ -139,30 +133,29 @@ data class PongPayload(
 )
 
 @Serializable
-data class DisplayTextCommandPayload(
-    val action: LocalAction = LocalAction.DISPLAY_TEXT,
+data class DisplayTextCommand(
+    val action: CommandAction = CommandAction.DISPLAY_TEXT,
     val timeoutMs: Long,
-    val params: DisplayTextParams,
+    val params: DisplayTextCommandParams,
 )
 
 @Serializable
-data class DisplayTextParams(
+data class DisplayTextCommandParams(
     val text: String,
     val durationMs: Long,
-    val priority: String? = null,
 )
 
 @Serializable
-data class CapturePhotoCommandPayload(
-    val action: LocalAction = LocalAction.CAPTURE_PHOTO,
+data class CapturePhotoCommand(
+    val action: CommandAction = CommandAction.CAPTURE_PHOTO,
     val timeoutMs: Long,
-    val params: CapturePhotoParams,
+    val params: CapturePhotoCommandParams,
     val transfer: CaptureTransfer,
 )
 
 @Serializable
-data class CapturePhotoParams(
-    val quality: String? = null,
+data class CapturePhotoCommandParams(
+    val quality: CapturePhotoQuality? = null,
 )
 
 @Serializable
@@ -173,43 +166,75 @@ data class CaptureTransfer(
 )
 
 @Serializable
-data class CommandAckPayload(
-    val action: LocalAction,
+data class CommandAck(
+    val action: CommandAction,
     val acceptedAt: Long,
     val runtimeState: LocalRuntimeState,
 )
 
-@Serializable
-data class CommandStatusPayload(
-    val action: LocalAction,
-    val status: LocalCommandStatus,
-    val statusAt: Long,
-    val detailCode: String? = null,
-    val detailMessage: String? = null,
-)
+@Serializable(with = LocalCommandStatusSerializer::class)
+sealed interface LocalCommandStatus {
+    val action: CommandAction
+    val status: LocalCommandProgress
+    val statusAt: Long
+    val detailCode: String?
+    val detailMessage: String?
+}
 
 @Serializable
-data class DisplayTextCommandResultPayload(
-    val action: LocalAction = LocalAction.DISPLAY_TEXT,
-    val completedAt: Long,
-    val result: DisplayTextResult,
-)
+data class ExecutingCommandStatus(
+    override val action: CommandAction,
+    override val status: LocalCommandProgress = LocalCommandProgress.EXECUTING,
+    override val statusAt: Long,
+    override val detailCode: String? = null,
+    override val detailMessage: String? = null,
+) : LocalCommandStatus
+
+@Serializable
+data class DisplayingCommandStatus(
+    override val action: CommandAction = CommandAction.DISPLAY_TEXT,
+    override val status: LocalCommandProgress = LocalCommandProgress.DISPLAYING,
+    override val statusAt: Long,
+    override val detailCode: String? = null,
+    override val detailMessage: String? = null,
+) : LocalCommandStatus
+
+@Serializable
+data class CapturingCommandStatus(
+    override val action: CommandAction = CommandAction.CAPTURE_PHOTO,
+    override val status: LocalCommandProgress = LocalCommandProgress.CAPTURING,
+    override val statusAt: Long,
+    override val detailCode: String? = null,
+    override val detailMessage: String? = null,
+) : LocalCommandStatus
+
+@Serializable(with = LocalCommandResultSerializer::class)
+sealed interface LocalCommandResult {
+    val action: CommandAction
+}
 
 @Serializable
 data class DisplayTextResult(
+    override val action: CommandAction = CommandAction.DISPLAY_TEXT,
+    val completedAt: Long,
+    val result: DisplayTextOutcome,
+) : LocalCommandResult
+
+@Serializable
+data class DisplayTextOutcome(
     val displayed: Boolean = true,
     val durationMs: Long,
 )
 
 @Serializable
-data class CapturePhotoCommandResultPayload(
-    val action: LocalAction = LocalAction.CAPTURE_PHOTO,
+data class CapturePhotoResult(
+    override val action: CommandAction = CommandAction.CAPTURE_PHOTO,
     val completedAt: Long,
-    val result: CapturePhotoResult,
-)
+    val result: CapturePhotoOutcome,
+) : LocalCommandResult
 
 @Serializable
-data class CapturePhotoResult(
+data class CapturePhotoOutcome(
     val mediaType: String = LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG,
     val size: Long,
     val width: Int,
@@ -218,14 +243,14 @@ data class CapturePhotoResult(
 )
 
 @Serializable
-data class CommandErrorPayload(
-    val action: LocalAction,
+data class CommandError(
+    val action: CommandAction,
     val failedAt: Long,
-    val error: CommandError,
+    val error: CommandFailure,
 )
 
 @Serializable
-data class CommandError(
+data class CommandFailure(
     val code: String,
     val message: String,
     val retryable: Boolean,
@@ -233,8 +258,8 @@ data class CommandError(
 )
 
 @Serializable
-data class ChunkStartPayload(
-    val action: LocalAction = LocalAction.CAPTURE_PHOTO,
+data class ChunkStart(
+    val action: CommandAction = CommandAction.CAPTURE_PHOTO,
     val mediaType: String = LocalProtocolConstants.IMAGE_MIME_TYPE_JPEG,
     val totalSize: Long,
     val width: Int? = null,
@@ -243,8 +268,8 @@ data class ChunkStartPayload(
 )
 
 @Serializable
-data class ChunkDataPayload(
-    val action: LocalAction = LocalAction.CAPTURE_PHOTO,
+data class ChunkData(
+    val action: CommandAction = CommandAction.CAPTURE_PHOTO,
     val index: Int,
     val offset: Long,
     val size: Int,
@@ -252,8 +277,8 @@ data class ChunkDataPayload(
 )
 
 @Serializable
-data class ChunkEndPayload(
-    val action: LocalAction = LocalAction.CAPTURE_PHOTO,
+data class ChunkEnd(
+    val action: CommandAction = CommandAction.CAPTURE_PHOTO,
     val totalChunks: Int,
     val totalSize: Long,
     val sha256: String? = null,
